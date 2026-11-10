@@ -199,8 +199,9 @@ class ControllerTests(PanelFixture):
         data.update(api_key='private-example-credential', extra_setting='keep me')
         path.write_text(json.dumps(data),encoding='utf-8')
         response = self.controller.configuration()
-        self.assertNotIn('private-example-credential', json.dumps(response))
-        self.assertTrue(response['llm']['api_key_configured'])
+        self.assertEqual(response['llm']['api_key'], 'private-example-credential')
+        self.assertEqual(response['model_profiles']['llm'][0]['api_key'], 'private-example-credential')
+        self.assertNotIn('private-example-credential', json.dumps(response['tts']))
         self.controller.save_configuration({'llm':{'api_key':'','model':'new-model'}})
         self.assertEqual(read_json(path)['api_key'], 'private-example-credential')
         self.assertEqual(read_json(path)['extra_setting'], 'keep me')
@@ -219,7 +220,7 @@ class ControllerTests(PanelFixture):
         self.assertEqual(library['active']['llm'], 'current-llm')
         self.assertEqual(library['llm'][0]['name'], '主力')
         self.assertEqual(library['llm'][0]['api_key'], 'private-model-key')
-        self.assertNotIn('private-model-key', json.dumps(self.controller.configuration()))
+        self.assertEqual(self.controller.configuration()['model_profiles']['llm'][0]['api_key'], 'private-model-key')
         self.controller.save_configuration({'llm': {'model': 'second-model', 'api_key': 'other-secret'},
             'llm_profile': {'action': 'add', 'id': 'current-llm', 'name': '备用'}})
         self.assertEqual(read_json(path)['model'], 'first-model')
@@ -281,7 +282,7 @@ class ControllerTests(PanelFixture):
             self.assertEqual(saved[key], value)
             self.assertEqual(self.controller.configuration()['llm'][key], value)
         self.assertEqual(saved['api_key'], 'private-model-key')
-        self.assertNotIn('private-model-key', json.dumps(self.controller.configuration()))
+        self.assertEqual(self.controller.configuration()['llm']['api_key'], 'private-model-key')
         self.controller.save_configuration({'llm':{'extra_body':{}}})
         self.assertEqual(read_json(path)['extra_body'], {})
 
@@ -301,7 +302,7 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['api_key'], 'worldguide-test-key')
         config = self.controller.configuration()['llm']
         self.assertEqual(config['model'], 'grok-4.6')
-        self.assertNotIn('api_key', config)
+        self.assertEqual(config['api_key'], 'worldguide-test-key')
         with self.assertRaisesRegex(PanelError, '填写新接口的 API 密钥'):
             self.controller.save_configuration({'llm': {'base_url': 'https://api.deepseek.com'}})
         self.controller.save_configuration({'llm': {'base_url': 'https://api.deepseek.com', 'clear_api_key': True}})
@@ -438,8 +439,12 @@ class HTTPTests(PanelFixture):
         self.assertEqual(self.request('/api/start',{},origin='null')[0],403)
 
     def test_http_start_stop_and_secret_free_config(self):
+        body = self.request('/api/config')[2]
         self.assertEqual(self.request('/api/config')[0],200)
-        self.assertNotIn(b'"api_key":',self.request('/api/config')[2])
+        payload = json.loads(body)
+        self.assertIn('api_key', payload['llm'])
+        self.assertNotIn('api_key', payload['tts'])
+        self.assertTrue(all('api_key' not in item for item in payload['model_profiles']['tts']))
         self.assertEqual(self.request('/api/start',{})[0],200)
         self.assertEqual(self.request('/api/config',{'groups':[]})[0],409)
         self.assertEqual(self.request('/api/stop',{})[0],200)

@@ -131,6 +131,8 @@ def apply_profile(library, kind, request, incoming, current_file):
 def _public(kind, item):
     view = {key: item[key] for key in FIELDS[kind] if key in item}
     view.update(id=item["id"], name=item["name"], api_key_configured=bool(item.get("api_key")))
+    if kind == "llm":
+        view["api_key"] = item.get("api_key") or ""
     return view
 
 

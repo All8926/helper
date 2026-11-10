@@ -322,6 +322,8 @@ class PanelController:
                     for key, default in (('json_mode', True), ('token_limit_parameter', 'max_tokens'), ('extra_body', {})):
                         result[name].setdefault(key, default)
                 result[name]['api_key_configured'] = bool(value.get('api_key'))
+                if name == 'llm':
+                    result[name]['api_key'] = value.get('api_key') or ''
             else:
                 result['groups'] = list(value.get('groups', {}))
                 result['group_names'] = value.get('group_names', {})

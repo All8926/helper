@@ -726,7 +726,7 @@ function showModelProfile(name) {
   profileSelection[name] = id;
   const chosen = profileList(name).find(item => item.id === id) || config?.[name] || {};
   fill(form, {...(name === 'llm' ? {json_mode:true, token_limit_parameter:'max_tokens', extra_body:{}} : {}), ...chosen});
-  form.elements.api_key.value = '';
+  form.elements.api_key.value = name === 'llm' ? (chosen.api_key || '') : '';
   form.elements.clear_api_key.checked = false;
   $('.key-state', form).textContent = chosen.api_key_configured ? '已配置' : '尚未配置';
   form.querySelector('[data-profile-name]').value = chosen.name || '';
