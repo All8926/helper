@@ -359,6 +359,9 @@ td { padding: 16px 20px; vertical-align: middle; border-top: 1px solid var(--tab
 .group-name-row input { margin: 0; }
 @media (max-width: 600px) { .group-name-row { grid-template-columns: 1fr; gap: var(--space-1); } }
 .live-hint { font-size: 12px; color: var(--muted); line-height: 1.7; }
+.member-pick-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.member-pick-head label { margin: 0; }
+.member-pick-head .text-button { min-height: 32px; padding-inline: var(--space-2); }
 .member-picks { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
 .member-picks:empty { display: none; }
 .groups-tabs { margin: 0 0 var(--space-6); }

@@ -134,10 +134,13 @@
             <p class="group-name-hint">艾特或叫别名时，带上本群这段时间内的文字。默认 6 小时、300 条，只保留最近的。</p>
             <label for="behavior-admins">管理员微信 ID</label>
             <textarea id="behavior-admins" rows="3" placeholder="每行一个 wxid" spellcheck="false" autocomplete="off"></textarea>
-            <label for="behavior-member-search">从群成员点选</label>
+            <div class="member-pick-head">
+              <label for="behavior-member-search">从群成员点选</label>
+              <button id="behavior-members-toggle" class="text-button" type="button" aria-expanded="false" aria-controls="behavior-members">展开成员</button>
+            </div>
             <input id="behavior-member-search" type="search" placeholder="搜索昵称或微信 ID" autocomplete="off">
             <p id="behavior-member-hint" class="group-name-hint">连接微信并打开该群后，可以点选成员。</p>
-            <div id="behavior-members" class="member-picks"></div>
+            <div id="behavior-members" class="member-picks hidden"></div>
             <h3 class="group-name-heading">本群插件</h3>
             <p class="group-name-hint">勾选表示这个群使用该功能。插件管理里停用的功能不会出现在这里，私聊仍跟随账号总开关。</p>
             <div id="behavior-plugins" class="room-plugins"></div>

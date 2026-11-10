@@ -40,7 +40,7 @@ let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGenera
 let sendChatsAttempted = false;
 let taskRows=[], taskActions=[], taskActionSignature='', taskGeneration=0, taskLoading=false, taskLastFetch=0, taskSignature='';
 let groupNameDraft = new Map(), discoveredGroups = [];
-let behaviorRoom = '', behaviorDraft = new Map(), behaviorDirty = false, behaviorMembers = [], memberPickGeneration = 0;
+let behaviorRoom = '', behaviorDraft = new Map(), behaviorDirty = false, behaviorMembers = [], memberPickGeneration = 0, membersExpanded = false, memberListRoom = '';
 let personalityItems = [], personalityDirty = false;
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
 const contactPageSize=50;
@@ -412,6 +412,14 @@ function paintPersonalities() {
     `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><label>提示词<textarea data-personality-prompt rows="4" spellcheck="false">${escape(item.prompt)}</textarea></label></div>`).join('')
     : '<p class="section-description">还没有人格。未保存过时会使用内置的嘴臭、卑微和夸夸。</p>';
 }
+function syncMemberToggle() {
+  const button = $('#behavior-members-toggle');
+  const count = behaviorMembers.length;
+  button.classList.toggle('hidden', count === 0);
+  button.textContent = membersExpanded ? '收起成员' : (count ? `展开成员（${count}）` : '展开成员');
+  button.setAttribute('aria-expanded', String(membersExpanded));
+  $('#behavior-members').classList.toggle('hidden', !membersExpanded);
+}
 function paintMemberPicks() {
   const query = $('#behavior-member-search').value.trim().toLowerCase();
   const rows = behaviorMembers.filter(member => !query || [member.nickname, member.wechat_name, member.wxid].join(' ').toLowerCase().includes(query)).slice(0, 40);
@@ -420,9 +428,14 @@ function paintMemberPicks() {
     const name = member.nickname || member.wxid;
     return `<button type="button" class="secondary small" data-admin-wxid="${escape(member.wxid)}">${escape(name)}${role ? ' · ' + role : ''}</button>`;
   }).join('');
+  syncMemberToggle();
 }
 async function loadMemberPicks() {
   const generation = ++memberPickGeneration, room = behaviorRoom;
+  if (room !== memberListRoom) {
+    membersExpanded = false;
+    memberListRoom = room;
+  }
   behaviorMembers = []; paintMemberPicks();
   if (!room) { $('#behavior-member-hint').textContent = ''; return; }
   $('#behavior-member-hint').textContent = '正在读取群成员…';
@@ -483,7 +496,14 @@ for (const id of groupsTabIds) {
 }
 for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
-$('#behavior-member-search').oninput = paintMemberPicks;
+$('#behavior-member-search').oninput = () => {
+  if ($('#behavior-member-search').value.trim()) membersExpanded = true;
+  paintMemberPicks();
+};
+$('#behavior-members-toggle').onclick = () => {
+  membersExpanded = !membersExpanded;
+  syncMemberToggle();
+};
 $('#behavior-members').onclick = event => {
   const button = event.target.closest('[data-admin-wxid]');
   if (!button) return;
@@ -1074,7 +1094,7 @@ async function switchRobot(identifier){
   state=null;config=null;logs=[];logCursor=0;selectedPlugin='';renderLogs();
   renderState();renderAccounts();
   groupNameDraft=new Map(); discoveredGroups=[]; $('#group-ids').value=''; renderGroupNames(); renderDiscoveredGroups();
-  behaviorRoom=''; behaviorDraft=new Map(); behaviorDirty=false; personalityDirty=false; behaviorMembers=[];
+  behaviorRoom=''; behaviorDraft=new Map(); behaviorDirty=false; personalityDirty=false; behaviorMembers=[]; membersExpanded=false; memberListRoom='';
   await loadConfig();await poll();navigate();
 }
 $('#robot-select').onchange=event=>{
