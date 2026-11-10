@@ -359,6 +359,11 @@ class MemberStore:
         with self._lock:
             return tuple((self.room_settings.get(room) or {}).get("aliases", ()))
 
+    def disabled_plugins(self, room):
+        with self._lock:
+            values = (self.room_settings.get(room) or {}).get("disabled_plugins") or ()
+            return frozenset(value for value in values if isinstance(value, str))
+
     def alias_mentioned(self, room, text):
         return name_mentioned(text, self.room_aliases(room))
 
@@ -525,31 +530,49 @@ class MemberStore:
                 raise PersonalityExpired("人格已切换")
             yield
 
+    def context_window(self, room):
+        """这个群带给模型的时间范围和条数。没单独配置时是 6 小时、300 条。"""
+        from .room_behavior import DEFAULT_CONTEXT_HOURS, DEFAULT_CONTEXT_LIMIT
+        setting = self.room_settings.get(room) or {}
+        return (setting.get("context_hours", DEFAULT_CONTEXT_HOURS),
+                setting.get("context_limit", DEFAULT_CONTEXT_LIMIT))
+
+    def _context_speaker(self, room, sender_id, bot_generated):
+        """流水里标出发言人。机器人自己的回复用本群别名，没有别名就标成机器人。"""
+        if bot_generated or sender_id == self.account:
+            aliases = (self.room_settings.get(room) or {}).get("aliases") or ()
+            return aliases[0] if aliases else "机器人"
+        return self.display_name(sender_id, room) or "群友"
+
     def conversation_snapshot(self, message):
-        """当前发言者在本群、当前消息之前的 10 条有效文本，不混入后来消息。"""
+        """本群最近一段时间内、当前消息之前的文字。后来的消息不带入。"""
         from .summary import CONTROL
         if message.chat_id not in self.groups:
             raise MemberError("这个群尚未启用聊天记录")
         with self._lock:
             self.rollover()
-            day, start, end = self._day_bounds()
+            day, _, _ = self._day_bounds()
+            hours, limit = self.context_window(message.chat_id)
+            since = (self._now() - timedelta(hours=hours)).astimezone(timezone.utc).isoformat()
             db = self._connection()
             current = db.execute("""SELECT id FROM messages WHERE account=? AND room=? AND sender_id=?
-                AND session_id=? AND sequence=? AND text=? AND received_at>=? AND received_at<?
+                AND session_id=? AND sequence=? AND text=? AND received_at>=?
                 ORDER BY id DESC LIMIT 1""", (self.account, message.chat_id, message.sender_id,
-                message.session_id, message.sequence, message.text, start, end)).fetchone()
+                message.session_id, message.sequence, message.text, since)).fetchone()
             if current is None:
-                raise SnapshotExpired("当前消息已被清空或已跨天")
-            cursor = db.execute("""SELECT * FROM messages WHERE account=? AND room=? AND sender_id=?
-                AND id<? AND received_at>=? AND received_at<? AND bot_generated=0 ORDER BY id DESC""",
-                (self.account, message.chat_id, message.sender_id, current[0], start, end))
-            previous = []
+                raise SnapshotExpired("当前消息已被清空或已超出上下文时间")
+            cursor = db.execute("""SELECT * FROM messages WHERE account=? AND room=? AND id<?
+                AND received_at>=? ORDER BY id DESC""",
+                (self.account, message.chat_id, current[0], since))
+            previous, budget = [], max(limit - 1, 0)
             for row in cursor:
+                if len(previous) >= budget:
+                    break
                 text = row["text"].strip()
                 if text and "WXBOT_AT_CHAT_PROBE" not in text and text.split(maxsplit=1)[0] not in CONTROL:
-                    previous.append(dict(row))
-                    if len(previous) == 10:
-                        break
+                    item = dict(row)
+                    item["speaker"] = self._context_speaker(message.chat_id, row["sender_id"], row["bot_generated"])
+                    previous.append(item)
             member = self.find_by_wxid(message.sender_id, message.chat_id)
             state = db.execute("SELECT generation FROM chat_buffers WHERE account=? AND room=?",
                                (self.account, message.chat_id)).fetchone()
@@ -712,6 +735,15 @@ class MemberStore:
                         VALUES(?,?,?,?,?,?,1)""", (self.account, room, key, name, name, wxid))
                 db.execute("INSERT OR IGNORE INTO aliases VALUES(?,?,?,?)", (self.account, room, alias, key))
             return self._member(self._row(name, room))
+
+    def record_bot_reply(self, message, text):
+        """把机器人刚发出的回复写进群流水，下次上下文才能看见自己说过的话。"""
+        if not isinstance(text, str) or not text.strip():
+            return False
+        reply = type(message)(text.strip(), message.chat_id, sender_id=self.account, is_group=True,
+                              is_self=True, session_id=message.session_id, sequence=0,
+                              data={"bot_generated": True})
+        return self.record(reply)
 
     def record(self, message):
         if not self.history_enabled or message.type != 1 or not message.is_group or message.chat_id not in self.groups:

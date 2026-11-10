@@ -248,7 +248,9 @@ class BotApplication:
                 if self.members is not None and command_blocked(self.members, message):
                     self._notify_admin_only(message)
                 else:
-                    if self.plugins.is_active("personality"):
+                    group = message.is_group or str(message.chat_id).endswith("@chatroom")
+                    disabled = self.members.disabled_plugins(message.chat_id) if group and self.members is not None else frozenset()
+                    if self.plugins.is_active("personality") and "personality" not in disabled:
                         message = prepare_switch(message, self.members)
                     self.plugins.dispatch(message)
 

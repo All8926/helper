@@ -49,3 +49,8 @@ class Plugin:
                                  personality.name)
         display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
         deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard)
+        # 发出去之后才记。写库失败不影响已经发出的回复。
+        try:
+            self.members.record_bot_reply(message, reply)
+        except Exception:
+            ctx.logger.warning("机器人回复已发出，但没有写入群流水")

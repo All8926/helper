@@ -127,6 +127,7 @@ function renderState() {
   articles.render();
   document.querySelectorAll('.save-hint').forEach(node=>node.textContent=unavailable?'连接中断':!state?'正在读取':running?'停止后可保存':'启动后生效');
   if(state)$('#nav-plugin-count').textContent=state.plugins.length;
+  if(!behaviorDirty && $('#behavior-plugins')) paintRoomPlugins((config?.room_settings?.[behaviorRoom]?.disabled_plugins) || []);
   renderPlugins();
   renderPluginEditor();
 }
@@ -277,6 +278,10 @@ const lines = value => [...new Set(value.split(/\r?\n/).map(s=>s.trim()).filter(
 function discoveredName(room) {
   return discoveredGroups.find(item => item.chat_id === room)?.name || '';
 }
+function contextNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : fallback;
+}
 function roomTitle(room) {
   return config?.group_names?.[room] || discoveredName(room) || '';
 }
@@ -285,7 +290,13 @@ function roomLabel(room) {
   return name ? name + ' · ' + room : room;
 }
 function readBehaviorForm() {
-  return {admins: lines($('#behavior-admins').value), aliases: lines($('#behavior-aliases').value), personality: $('#behavior-personality').value || '默认'};
+  const boxes = [...$('#behavior-plugins').querySelectorAll('[data-room-plugin]')];
+  const disabled = boxes.length ? boxes.filter(node => !node.checked).map(node => node.dataset.roomPlugin)
+    : (config?.room_settings?.[behaviorRoom]?.disabled_plugins || []);
+  return {admins: lines($('#behavior-admins').value), aliases: lines($('#behavior-aliases').value),
+    personality: $('#behavior-personality').value || '默认', disabled_plugins: disabled,
+    context_hours: contextNumber($('#behavior-hours').value, 6),
+    context_limit: contextNumber($('#behavior-limit').value, 300)};
 }
 function syncRoomBehavior() {
   const rooms = config?.groups || [];
@@ -322,8 +333,23 @@ function showBehavior(room) {
   const names = (config?.personalities || []).map(item => item.name);
   const selected = names.includes(saved.personality) ? saved.personality : '默认';
   $('#behavior-personality').value = selected;
+  $('#behavior-hours').value = saved.context_hours || 6;
+  $('#behavior-limit').value = saved.context_limit || 300;
+  paintRoomPlugins(saved.disabled_plugins || []);
   const title = $('#behavior-room-title');
   if (title) title.textContent = room ? roomLabel(room) : '当前群';
+}
+let roomPluginSignature = '';
+function paintRoomPlugins(disabled) {
+  const box = $('#behavior-plugins');
+  if (!box) return;
+  const off = new Set(disabled || []);
+  const plugins = (state?.plugins || []).filter(plugin => plugin.enabled);
+  const signature = JSON.stringify([behaviorRoom, plugins.map(plugin => plugin.name), [...off]]);
+  if (signature === roomPluginSignature) return;
+  roomPluginSignature = signature;
+  box.innerHTML = plugins.length ? plugins.map(plugin => `<label class="inline"><input type="checkbox" data-room-plugin="${escape(plugin.name)}" ${off.has(plugin.name) ? '' : 'checked'}>${escape(pluginNames[plugin.name]?.[0] || plugin.description || plugin.name)}</label>`).join('')
+    : '<p class="group-name-hint">插件管理里还没有启用的功能。</p>';
 }
 function paintBehaviorRooms() {
   const list = $('#behavior-room-list');
@@ -422,7 +448,8 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit']) $('#'+id).oninput = () => { behaviorDirty = true; };
+$('#behavior-plugins').onchange = () => { behaviorDirty = true; };
 $('#behavior-member-search').oninput = paintMemberPicks;
 $('#behavior-members').onclick = event => {
   const button = event.target.closest('[data-admin-wxid]');

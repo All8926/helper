@@ -295,9 +295,19 @@ class PluginManager:
                 logger.exception("插件 %s 加载失败，其他插件继续运行", target)
 
     def dispatch(self, message, *, only=None):
+        disabled = frozenset()
+        chat_id = getattr(message, "chat_id", "")
+        group = bool(getattr(message, "is_group", False) or str(chat_id).endswith("@chatroom"))
+        if group and self.member_store is not None:
+            try:
+                disabled = self.member_store.disabled_plugins(chat_id)
+            except Exception:
+                disabled = frozenset()
         with self._lock:
             records = tuple(self.records.values())
         for record in records:
+            if record.spec.name in disabled:
+                continue
             if (only is None or record.spec.name == only) and message.type in record.spec.message_types:
                 record.enqueue(message)
 

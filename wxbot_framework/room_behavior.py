@@ -14,6 +14,10 @@ MAX_ADMINS = 32
 MAX_ALIASES = 8
 MAX_PERSONALITIES = 12
 MAX_PROMPT = 8000
+DEFAULT_CONTEXT_HOURS = 6
+DEFAULT_CONTEXT_LIMIT = 300
+MAX_CONTEXT_HOURS = 168
+MAX_CONTEXT_LIMIT = 2000
 ALIAS_TEXT = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_-]{2,16}$")
 PERSONALITY_NAME = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_-]{1,16}$")
 
@@ -91,6 +95,42 @@ def normalize_aliases(values):
     return result
 
 
+def normalize_disabled_plugins(values):
+    """只记录这个群要关掉的插件。没写的插件继续跟随账号总开关。"""
+    from .config import validate_name
+    if values is None:
+        values = []
+    if not isinstance(values, list) or len(values) > 64:
+        raise BehaviorError("每个群最多单独关闭 64 个插件")
+    result = []
+    for value in values:
+        try:
+            name = validate_name(value)
+        except ValueError as error:
+            raise BehaviorError("插件名称无效") from error
+        if name not in result:
+            result.append(name)
+    return result
+
+
+def normalize_context_hours(value):
+    """没填时用 6 小时。每个群可以单独改。"""
+    if value is None:
+        return DEFAULT_CONTEXT_HOURS
+    if type(value) is not int or not 1 <= value <= MAX_CONTEXT_HOURS:
+        raise BehaviorError("上下文小时数应为 1–168 的整数")
+    return value
+
+
+def normalize_context_limit(value):
+    """没填时最多带 300 条。每个群可以单独改。"""
+    if value is None:
+        return DEFAULT_CONTEXT_LIMIT
+    if type(value) is not int or not 1 <= value <= MAX_CONTEXT_LIMIT:
+        raise BehaviorError("上下文条数应为 1–2000 的整数")
+    return value
+
+
 def normalize_room_setting(value, names):
     if not isinstance(value, dict):
         raise BehaviorError("群行为配置格式不正确")
@@ -99,7 +139,10 @@ def normalize_room_setting(value, names):
         raise BehaviorError("请选择已保存的人格")
     return {"admins": normalize_admins(value.get("admins", [])),
             "aliases": normalize_aliases(value.get("aliases", [])),
-            "personality": personality}
+            "personality": personality,
+            "disabled_plugins": normalize_disabled_plugins(value.get("disabled_plugins", [])),
+            "context_hours": normalize_context_hours(value.get("context_hours")),
+            "context_limit": normalize_context_limit(value.get("context_limit"))}
 
 
 def view_behavior(options):

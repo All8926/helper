@@ -22,7 +22,7 @@ ctx.reply_voice(message, voice_path)
 
 ## Fish Audio 文字转语音
 
-`voice_reply` 是可选插件，默认关闭。它把 `mention_chat` 已生成的回复合成为微信语音；人格与此人此前十条上下文保持原有处理。菜单、总结、接龙仍发文字。
+`voice_reply` 是可选插件，默认关闭。它把 `mention_chat` 已生成的回复合成为微信语音；人格与本群最近的群聊上下文保持原有处理。菜单、总结、接龙仍发文字。
 
 1. 安装上面的语音编码依赖，并完成大模型和成员目录配置。
 2. 将 `tts_config.example.json` 复制为 `tts_config.json`，填写自己的密钥。正常启动也会补齐缺失模板。

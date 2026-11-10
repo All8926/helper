@@ -57,7 +57,7 @@
     </section>
   </section>
   <section class="page hidden" id="page-plugins" aria-labelledby="plugins-heading">
-    <div class="page-heading"><div><h1 id="plugins-heading">插件管理</h1></div><label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12 12 4.5 4.5"/></svg><input id="plugin-search" placeholder="搜索插件" aria-label="搜索插件"></label></div>
+    <div class="page-heading"><div><h1 id="plugins-heading">插件管理</h1><p>这里的启用对当前账号的全部群生效。单个群可以在「群聊与会话 → 群设置」里再关掉某些功能。</p></div><label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12 12 4.5 4.5"/></svg><input id="plugin-search" placeholder="搜索插件" aria-label="搜索插件"></label></div>
     <div class="table-container"><table class="plugin-table"><thead><tr><th scope="col">插件</th><th scope="col">功能说明</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody id="plugin-list"><tr><td colspan="4" class="table-empty">正在读取插件列表…</td></tr></tbody></table></div>
   </section>
   <section class="page hidden" id="page-groups" aria-labelledby="groups-heading">
@@ -114,7 +114,7 @@
       <div class="behavior-layout">
         <div class="room-pick-pane">
           <h2>已接入的群</h2>
-          <p class="section-description">点一个群，编辑它自己的管理员、别名和人格。</p>
+          <p class="section-description">点一个群，编辑它自己的管理员、别名、人格、上下文和插件。</p>
           <div id="behavior-room-list" class="room-pick-list"></div>
         </div>
         <form id="behavior-form" class="settings-section">
@@ -127,12 +127,20 @@
             <select id="behavior-personality"></select>
             <label for="behavior-aliases">机器人别名</label>
             <textarea id="behavior-aliases" rows="3" placeholder="每行一个，例如小助手" spellcheck="false"></textarea>
+            <div class="field-pair">
+              <label for="behavior-hours">上下文小时数<input id="behavior-hours" type="number" min="1" max="168" step="1" value="6"></label>
+              <label for="behavior-limit">上下文最多条数<input id="behavior-limit" type="number" min="1" max="2000" step="1" value="300"></label>
+            </div>
+            <p class="group-name-hint">艾特或叫别名时，带上本群这段时间内的文字。默认 6 小时、300 条，只保留最近的。</p>
             <label for="behavior-admins">管理员微信 ID</label>
             <textarea id="behavior-admins" rows="3" placeholder="每行一个 wxid" spellcheck="false" autocomplete="off"></textarea>
             <label for="behavior-member-search">从群成员点选</label>
             <input id="behavior-member-search" type="search" placeholder="搜索昵称或微信 ID" autocomplete="off">
             <p id="behavior-member-hint" class="group-name-hint">连接微信并打开该群后，可以点选成员。</p>
             <div id="behavior-members" class="member-picks"></div>
+            <h3 class="group-name-heading">本群插件</h3>
+            <p class="group-name-hint">勾选表示这个群使用该功能。插件管理里停用的功能不会出现在这里，私聊仍跟随账号总开关。</p>
+            <div id="behavior-plugins" class="room-plugins"></div>
           </div>
           <div class="form-footer"><span class="live-hint">别名和艾特都会触发回复，需先启用「艾特对话」。成语接龙、看图猜成语不限管理员。</span><button id="save-behavior" class="primary" type="submit">保存本群</button></div>
         </form>

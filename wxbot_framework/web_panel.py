@@ -791,6 +791,11 @@ class PanelController:
                     app.config.get('wechat_account') != account or app.stop_event.is_set()):
                 raise PanelError('机器人或账号已停止', 409)
             allowed = list(app.config.get('chat_allowlist', []))
+            room = params.get('chat_id') if isinstance(params, dict) else None
+            plugin_name = action_id.split('.')[1] if isinstance(action_id, str) and action_id.startswith('plugin.') else ''
+            if (isinstance(room, str) and room.endswith('@chatroom') and plugin_name and app.members is not None and
+                    plugin_name in app.members.disabled_plugins(room)):
+                raise PanelError('这个群已关闭该插件', 409)
         def still_current():
             with self.lock:
                 current = (self.app is app and self.state == 'running' and app._connection_ready and

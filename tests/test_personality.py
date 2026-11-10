@@ -1,4 +1,4 @@
-"""群人格持久性、统一风格、真实艾特与十条上下文及取消竞态。"""
+"""群人格持久性、统一风格、真实艾特与群聊流水及取消竞态。"""
 import json
 import sys
 import unittest
@@ -171,7 +171,7 @@ class PersonalityTests(unittest.TestCase):
             client.complete_json("功能", "输入")
         provider.assert_not_called()
 
-    def test_context_is_previous_ten_from_same_author_and_room_not_later_messages(self):
+    def test_context_keeps_recent_room_lines_and_drops_later_messages(self):
         for index in range(12):
             self.store.record(self.message(f"前文{index}", sequence=index + 1))
         self.store.record(self.message("其他人的话", sender=OTHER))
@@ -181,8 +181,19 @@ class PersonalityTests(unittest.TestCase):
         msg = self.chat("当前提问")
         self.store.record(self.message("当前提问之后才收到的消息", sequence=101))
         snapshot = self.store.conversation_snapshot(msg)
-        self.assertEqual([row["text"] for row in snapshot.messages], [f"前文{i}" for i in range(2, 12)])
+        self.assertEqual([row["text"] for row in snapshot.messages],
+                         [f"前文{i}" for i in range(12)] + ["其他人的话", "机器人输出"])
+        self.assertEqual(snapshot.messages[-1]["speaker"], "机器人")
         self.assertEqual(snapshot.current, msg.text)
+        self.store.room_settings[ROOM] = {"context_hours": 6, "context_limit": 2}
+        limited = self.store.conversation_snapshot(msg)
+        self.assertEqual([row["text"] for row in limited.messages], ["机器人输出"])
+        self.store.daily_clear = False
+        self.store.room_settings[ROOM] = {"context_hours": 1, "context_limit": 300}
+        self.now += timedelta(hours=7)
+        later = self.chat("七小时后", sequence=200)
+        aged = self.store.conversation_snapshot(later)
+        self.assertEqual([row["text"] for row in aged.messages], [])
 
     def test_true_mention_dialogue_uses_persona_context_and_returns_real_at(self):
         self.store.set_personality(ROOM, "嘴臭")
@@ -195,8 +206,10 @@ class PersonalityTests(unittest.TestCase):
         system, user = provider.call_args.args
         self.assertTrue(system.startswith("当前人格：嘴臭"))
         payload = json.loads(user)
-        self.assertEqual(len(payload["previous"]), 3)
-        self.assertEqual(payload["current"], "我今天又摸鱼了")
+        self.assertEqual([item["text"] for item in payload["transcript"] if not item["current"]],
+                         ["我今天第0次摸鱼", "我今天第1次摸鱼", "我今天第2次摸鱼"])
+        self.assertEqual(payload["transcript"][-1]["text"], "我今天又摸鱼了")
+        self.assertTrue(payload["transcript"][-1]["current"])
         self.assertNotIn(CAT, user)
         self.assertEqual(self.backend.sent[-1][2], (CAT,))
         self.assertTrue(self.backend.sent[-1][1].startswith("@测试成员\u2005"))
@@ -213,7 +226,8 @@ class PersonalityTests(unittest.TestCase):
         self.assertLessEqual(len(body), 20)
         self.assertTrue(body.startswith("三行代码"))
         self.assertFalse(any(char in body for char in "`#*-|"))
-        self.assertEqual(len(json.loads(provider.call_args.args[1])["previous"]), 1)
+        sent_context = json.loads(provider.call_args.args[1])["transcript"]
+        self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
         self.assertIn("长度与排版优先", provider.call_args.args[0])
         provider.return_value = {"reply": "#**```"}
         plugin.on_message(self.chat(sequence=101), self.ctx)
