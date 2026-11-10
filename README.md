@@ -2,6 +2,10 @@
 
 Windows 微信机器人 Python 插件框架，提供本地网页管理台和控制台入口。
 
+## 交流
+<summary>交流群二维码</summary>
+<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/b149253c-9684-447d-af17-f83030bdf1ba" />
+
 [在线文档](https://prometheus-first.github.io/helper/) · [快速开始](docs/guide/quick-start.md) · [插件开发](docs/development/plugins.md)
 
 **使用许可：允许个人自用，禁止商业使用。** 允许个人学习研究及非商业修改、免费分享，分享时须保留协议和版权声明。完整条款见 [LICENSE](LICENSE)，第三方组件继续适用各自的许可证。
@@ -14,6 +18,7 @@ Windows 微信机器人 Python 插件框架，提供本地网页管理台和控�
 - 朋友圈：发布文字和图片，读取已加载记录、点赞人和评论，手动点赞或发送评论。
 - 公众号文章：自动获取当前账号的关注公众号，点击公众号自动分页同步它的文章，点击文章自动加载正文和图片，按账号保存并导出 Markdown；目前支持已核对的微信 4.2.0.12
 - 消息收发：文本自动分段，图片、文件、表情包、语音条和视频，支持真实群艾特与群成员身份查询；接收图片时优先下载可用原图，微信 4.2.0.12 支持视频 CDN 下载，普通文件按块处理。
+- 原生引用回复：Windows 微信 4.2.0.12 支持插件在原会话引用普通文字。见[文本与引用回复](docs/messages/text.md#原生引用回复)。
 - 消息监控：显示时间、会话 ID、发送者及正文，展开合并转发记录，保留撤回标记。
 - 定时任务：按间隔或每天指定时间执行文字发送和插件提供的动作，支持多账号独立管理。
 - 群聊管理：群聊备注、进退群通知、成员昵称绑定、聊天总结、人格切换、成语游戏和图库取图。
@@ -89,11 +94,8 @@ tests/                离线回归测试
 tools/                配置初始化、测试与发布检查
 ```
 
-## 交流
 
-<details>
-<summary>交流群二维码</summary>
-<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/8da68736-0327-44f2-9149-0219b079da8b" />
+
 
 
 

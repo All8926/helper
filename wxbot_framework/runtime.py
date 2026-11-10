@@ -224,7 +224,9 @@ class BotApplication:
             logger.info('视频消息 | 发送者=%s | 微信ID=%s | 状态=%s',
                         nickname, wxid, message.data.get('video_status', 'unavailable'))
         elif message.type == 49:
-            if message.data.get('app_type') == 19:
+            if message.data.get('app_type') == 57:
+                logger.info("引用消息 | 发送者=%s | 微信ID=%s", nickname, wxid)
+            elif message.data.get('app_type') == 19:
                 logger.info('合并转发 | 发送者=%s | 微信ID=%s | 记录数=%s | 状态=%s',
                             nickname, wxid,
                             len(message.data.get('forwarded_records', ())),
