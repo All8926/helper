@@ -17,7 +17,7 @@ from .plugins import PluginManager
 from .sdk import Message, ServiceFacade
 from .members import MemberStore
 from .personality import prepare_switch
-from .room_behavior import command_blocked
+from .room_behavior import chat_switch, command_blocked
 
 logger = logging.getLogger("Bot")
 
@@ -249,10 +249,41 @@ class BotApplication:
                     self._notify_admin_only(message)
                 else:
                     group = message.is_group or str(message.chat_id).endswith("@chatroom")
+                    if group and self.members is not None and message.chat_id in self.members.groups:
+                        switch = chat_switch(message.text)
+                        if switch is not None:
+                            self._switch_mention_chat(message, switch)
                     disabled = self.members.disabled_plugins(message.chat_id) if group and self.members is not None else frozenset()
                     if self.plugins.is_active("personality") and "personality" not in disabled:
                         message = prepare_switch(message, self.members)
                     self.plugins.dispatch(message)
+
+    def _switch_mention_chat(self, message, enabled):
+        """管理员按群开关艾特对话。插件管理里的总开关关着时，群指令不能单独打开。"""
+        if not self.plugins.is_active("mention_chat"):
+            if enabled:
+                self._reply_command(message, "艾特对话在插件管理里是停用的，请先在后台打开。")
+                return
+        already_off = "mention_chat" in self.members.disabled_plugins(message.chat_id)
+        if enabled == (not already_off):
+            self._reply_command(message, "本群的对话功能已经开着。" if enabled else "本群的对话功能已经关着。")
+            return
+        try:
+            self.members.set_room_plugin_enabled(message.chat_id, "mention_chat", enabled)
+        except Exception:
+            logger.exception("本群艾特对话开关未写入")
+            self._reply_command(message, "暂时没能切换本群的对话功能。")
+            return
+        self._reply_command(message, "已开启本群的对话功能。" if enabled else "已关闭本群的对话功能。")
+
+    def _reply_command(self, message, text):
+        room, session = message.chat_id, message.session_id
+        def send():
+            try:
+                self.service.send_text(room, text, expected_session=session)
+            except Exception:
+                logger.info("指令回复未发出：room=%s", room)
+        threading.Thread(target=send, name="CommandReply", daemon=True).start()
 
     def _notify_admin_only(self, message):
         # 发送有等待时间，放到旁路，避免堵住收消息线程。

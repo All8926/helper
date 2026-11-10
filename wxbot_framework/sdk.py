@@ -522,6 +522,17 @@ class PluginContext:
     def plugin_is_active(self, name):
         return bool(self._plugin_active and self._plugin_active(name))
 
+    def room_config(self, message):
+        """账号插件配置叠上当前群单独写过的选项。私聊或这个群没改过时，就是账号配置。"""
+        merged = dict(self.config)
+        if self._members is None or not getattr(message, "is_group", False):
+            return merged
+        override = self._members.plugin_options(getattr(message, "chat_id", ""), self.name)
+        for key, value in override.items():
+            if key != "enabled":
+                merged[key] = value
+        return merged
+
     @property
     def speech(self):
         if self._speech is None:

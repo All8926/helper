@@ -4,7 +4,7 @@ import sys
 import unittest
 from datetime import timedelta
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import test_chat_summary as daily
 from plugins.mention_chat import Plugin as ChatPlugin
@@ -109,6 +109,40 @@ class PersonalityTests(unittest.TestCase):
         plugin.on_load(self.ctx)
         plugin.on_message(delivered, self.ctx)
         self.assertIn("已切换：嘴臭", self.backend.sent[-1][1])
+
+    def test_admin_command_toggles_mention_chat_for_one_room(self):
+        app = object.__new__(BotApplication)
+        sent = []
+        app.config, app.members = {"chat_allowlist": []}, self.store
+        app.plugins = Mock()
+        app.plugins.is_active.return_value = True
+        app.service = Mock()
+        app.service.send_text.side_effect = lambda room, text, **_kwargs: sent.append((room, text))
+        self.store.room_settings[ROOM] = {"admins": [CAT], "aliases": [], "personality": "默认",
+                                          "disabled_plugins": [], "context_hours": 6, "context_limit": 300,
+                                          "plugin_options": {}}
+
+        def run(text, sender=CAT):
+            with patch("wxbot_framework.runtime.threading.Thread") as thread:
+                thread.side_effect = lambda *args, **kwargs: Mock(start=lambda: kwargs["target"]())
+                app._emit(self.message(text, sender=sender))
+
+        run("/关闭对话", sender=OTHER)
+        self.assertEqual(sent[-1][1], "只有管理员可以使用这个指令。")
+        self.assertNotIn("mention_chat", self.store.disabled_plugins(ROOM))
+        run("/关闭对话")
+        self.assertEqual(sent[-1][1], "已关闭本群的对话功能。")
+        self.assertIn("mention_chat", self.store.disabled_plugins(ROOM))
+        self.assertNotIn("mention_chat", self.store.disabled_plugins(OTHER_ROOM))
+        run("/关闭对话")
+        self.assertEqual(sent[-1][1], "本群的对话功能已经关着。")
+        run("/开启对话")
+        self.assertEqual(sent[-1][1], "已开启本群的对话功能。")
+        self.assertNotIn("mention_chat", self.store.disabled_plugins(ROOM))
+        app.plugins.is_active.return_value = False
+        run("/开启对话")
+        self.assertEqual(sent[-1][1], "艾特对话在插件管理里是停用的，请先在后台打开。")
+        self.assertNotIn("mention_chat", self.store.disabled_plugins(ROOM))
 
     def test_missing_or_unknown_switch_returns_usage_without_changing_persona(self):
         plugin = PersonalityPlugin()

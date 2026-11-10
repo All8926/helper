@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from string import Formatter
 
 from .account import validate_account
 
@@ -131,6 +132,68 @@ def normalize_context_limit(value):
     return value
 
 
+def normalize_notice_template(value, field):
+    """进退群文案只允许 {nickname}，空文本表示继续用账号里的模板。"""
+    label = "进群文案" if field == "welcome_template" else "退群文案"
+    if not isinstance(value, str):
+        raise BehaviorError(f"{label}应为文本")
+    text = value.strip()
+    if not text:
+        return ""
+    if len(text.encode("utf-8")) > 700 or "\0" in text:
+        raise BehaviorError(f"{label}不能为空，且不超过 700 个字节")
+    try:
+        for _, name, spec, conversion in Formatter().parse(text):
+            if name is not None and (name != "nickname" or spec or conversion):
+                raise BehaviorError(f"{label}只支持 {{nickname}}")
+    except BehaviorError:
+        raise
+    except ValueError:
+        raise BehaviorError(f"{label}格式不正确") from None
+    return text
+
+
+def normalize_plugin_options(value):
+    """只保存这个群相对账号配置改过的项。目前开放进退群提醒的开关和文案。"""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict) or len(value) > 8:
+        raise BehaviorError("本群插件选项过多")
+    from .config import validate_name
+    result = {}
+    for name, options in value.items():
+        try:
+            plugin = validate_name(name)
+        except ValueError as error:
+            raise BehaviorError("插件名称无效") from error
+        if plugin != "group_notice":
+            raise BehaviorError("目前只能为进退群提醒按群设置文案")
+        cleaned = _normalize_notice_options(options)
+        if cleaned:
+            result[plugin] = cleaned
+    return result
+
+
+def _normalize_notice_options(options):
+    allowed = {"welcome", "leave_notice", "welcome_template", "leave_template"}
+    if not isinstance(options, dict) or set(options) - allowed:
+        raise BehaviorError("进退群文案格式不正确")
+    cleaned = {}
+    for key, label in (("welcome", "进群欢迎"), ("leave_notice", "退群提醒")):
+        if key not in options:
+            continue
+        if type(options[key]) is not bool:
+            raise BehaviorError(f"{label}应为开或关")
+        cleaned[key] = options[key]
+    for key in ("welcome_template", "leave_template"):
+        if key not in options:
+            continue
+        text = normalize_notice_template(options[key], key)
+        if text:
+            cleaned[key] = text
+    return cleaned
+
+
 def normalize_room_setting(value, names):
     if not isinstance(value, dict):
         raise BehaviorError("群行为配置格式不正确")
@@ -142,7 +205,8 @@ def normalize_room_setting(value, names):
             "personality": personality,
             "disabled_plugins": normalize_disabled_plugins(value.get("disabled_plugins", [])),
             "context_hours": normalize_context_hours(value.get("context_hours")),
-            "context_limit": normalize_context_limit(value.get("context_limit"))}
+            "context_limit": normalize_context_limit(value.get("context_limit")),
+            "plugin_options": normalize_plugin_options(value.get("plugin_options"))}
 
 
 def view_behavior(options):
@@ -167,6 +231,18 @@ def command_allowed(admins, sender, robot):
 
 def is_slash_command(text):
     return isinstance(text, str) and text.strip().startswith("/")
+
+
+def chat_switch(text):
+    """只认整句指令。True 是开启本群艾特对话，False 是关闭。"""
+    if not isinstance(text, str):
+        return None
+    command = text.strip()
+    if command == "/开启对话":
+        return True
+    if command == "/关闭对话":
+        return False
+    return None
 
 
 def command_blocked(store, message):

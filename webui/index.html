@@ -57,7 +57,7 @@
     </section>
   </section>
   <section class="page hidden" id="page-plugins" aria-labelledby="plugins-heading">
-    <div class="page-heading"><div><h1 id="plugins-heading">插件管理</h1><p>这里的启用对当前账号的全部群生效。单个群可以在「群聊与会话 → 群设置」里再关掉某些功能。</p></div><label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12 12 4.5 4.5"/></svg><input id="plugin-search" placeholder="搜索插件" aria-label="搜索插件"></label></div>
+    <div class="page-heading"><div><h1 id="plugins-heading">插件管理</h1><p>这里的启用和配置对当前账号生效。单个群可以在「群聊与会话 → 群设置」里关掉功能；进退群提醒还可以按群改文案。</p></div><label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12 12 4.5 4.5"/></svg><input id="plugin-search" placeholder="搜索插件" aria-label="搜索插件"></label></div>
     <div class="table-container"><table class="plugin-table"><thead><tr><th scope="col">插件</th><th scope="col">功能说明</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody id="plugin-list"><tr><td colspan="4" class="table-empty">正在读取插件列表…</td></tr></tbody></table></div>
   </section>
   <section class="page hidden" id="page-groups" aria-labelledby="groups-heading">
@@ -114,7 +114,7 @@
       <div class="behavior-layout">
         <div class="room-pick-pane">
           <h2>已接入的群</h2>
-          <p class="section-description">点一个群，编辑它自己的管理员、别名、人格、上下文和插件。</p>
+          <p class="section-description">点一个群，编辑它自己的管理员、别名、人格、上下文、插件和进退群文案。</p>
           <div id="behavior-room-list" class="room-pick-list"></div>
         </div>
         <form id="behavior-form" class="settings-section">
@@ -141,6 +141,16 @@
             <h3 class="group-name-heading">本群插件</h3>
             <p class="group-name-hint">勾选表示这个群使用该功能。插件管理里停用的功能不会出现在这里，私聊仍跟随账号总开关。</p>
             <div id="behavior-plugins" class="room-plugins"></div>
+            <div id="behavior-notice" class="room-notice hidden">
+              <h3 class="group-name-heading">进退群文案</h3>
+              <p class="group-name-hint">只改这个群。留空或选「跟随插件管理」时，继续用插件管理里的配置。文案只支持 {nickname}。</p>
+              <div class="field-pair">
+                <label for="behavior-welcome-switch">进群欢迎<select id="behavior-welcome-switch"><option value="">跟随插件管理</option><option value="on">本群开启</option><option value="off">本群关闭</option></select></label>
+                <label for="behavior-leave-switch">退群提醒<select id="behavior-leave-switch"><option value="">跟随插件管理</option><option value="on">本群开启</option><option value="off">本群关闭</option></select></label>
+              </div>
+              <label for="behavior-welcome">进群文案<textarea id="behavior-welcome" rows="2" spellcheck="false" placeholder="留空则使用插件管理里的模板"></textarea></label>
+              <label for="behavior-leave">退群文案<textarea id="behavior-leave" rows="2" spellcheck="false" placeholder="留空则使用插件管理里的模板"></textarea></label>
+            </div>
           </div>
           <div class="form-footer"><span class="live-hint">别名和艾特都会触发回复，需先启用「艾特对话」。成语接龙、看图猜成语不限管理员。</span><button id="save-behavior" class="primary" type="submit">保存本群</button></div>
         </form>

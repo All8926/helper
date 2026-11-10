@@ -364,6 +364,30 @@ class MemberStore:
             values = (self.room_settings.get(room) or {}).get("disabled_plugins") or ()
             return frozenset(value for value in values if isinstance(value, str))
 
+    def set_room_plugin_enabled(self, room, name, enabled):
+        """按群打开或关闭一个功能，并立刻写入群设置。"""
+        from .config import validate_name
+        plugin = validate_name(name)
+        if room not in self.groups or type(enabled) is not bool:
+            raise MemberError("请在已配置的群中开关功能")
+        with self._lock:
+            current = dict(self.room_settings.get(room) or {})
+            disabled = [item for item in current.get("disabled_plugins") or [] if item != plugin]
+            if not enabled:
+                disabled.append(plugin)
+            current["disabled_plugins"] = disabled
+            self.apply_room(room, current)
+            return plugin not in self.disabled_plugins(room)
+
+    def plugin_options(self, room, name):
+        """这个群单独改过的插件选项。没改过的项不在这里，调用方继续用账号配置。"""
+        with self._lock:
+            options = (self.room_settings.get(room) or {}).get("plugin_options") or {}
+            if not isinstance(options, dict):
+                return {}
+            value = options.get(name)
+            return dict(value) if isinstance(value, dict) else {}
+
     def alias_mentioned(self, room, text):
         return name_mentioned(text, self.room_aliases(room))
 

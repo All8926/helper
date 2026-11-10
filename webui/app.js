@@ -127,7 +127,10 @@ function renderState() {
   articles.render();
   document.querySelectorAll('.save-hint').forEach(node=>node.textContent=unavailable?'连接中断':!state?'正在读取':running?'停止后可保存':'启动后生效');
   if(state)$('#nav-plugin-count').textContent=state.plugins.length;
-  if(!behaviorDirty && $('#behavior-plugins')) paintRoomPlugins((config?.room_settings?.[behaviorRoom]?.disabled_plugins) || []);
+  if(!behaviorDirty && $('#behavior-plugins')) {
+    paintRoomPlugins((config?.room_settings?.[behaviorRoom]?.disabled_plugins) || []);
+    syncNoticePanel();
+  }
   renderPlugins();
   renderPluginEditor();
 }
@@ -296,7 +299,27 @@ function readBehaviorForm() {
   return {admins: lines($('#behavior-admins').value), aliases: lines($('#behavior-aliases').value),
     personality: $('#behavior-personality').value || '默认', disabled_plugins: disabled,
     context_hours: contextNumber($('#behavior-hours').value, 6),
-    context_limit: contextNumber($('#behavior-limit').value, 300)};
+    context_limit: contextNumber($('#behavior-limit').value, 300),
+    plugin_options: readNoticeOptions()};
+}
+function readNoticeOptions() {
+  const options = {};
+  const welcome = $('#behavior-welcome').value.trim();
+  const leave = $('#behavior-leave').value.trim();
+  if (welcome) options.welcome_template = welcome;
+  if (leave) options.leave_template = leave;
+  if ($('#behavior-welcome-switch').value === 'on') options.welcome = true;
+  if ($('#behavior-welcome-switch').value === 'off') options.welcome = false;
+  if ($('#behavior-leave-switch').value === 'on') options.leave_notice = true;
+  if ($('#behavior-leave-switch').value === 'off') options.leave_notice = false;
+  return Object.keys(options).length ? {group_notice: options} : {};
+}
+function syncNoticePanel() {
+  const node = $('#behavior-notice');
+  if (!node) return;
+  const plugin = (state?.plugins || []).find(item => item.name === 'group_notice');
+  const box = $('#behavior-plugins [data-room-plugin="group_notice"]');
+  node.classList.toggle('hidden', !(plugin && plugin.enabled && box && box.checked));
 }
 function syncRoomBehavior() {
   const rooms = config?.groups || [];
@@ -335,7 +358,16 @@ function showBehavior(room) {
   $('#behavior-personality').value = selected;
   $('#behavior-hours').value = saved.context_hours || 6;
   $('#behavior-limit').value = saved.context_limit || 300;
+  const notice = (saved.plugin_options || {}).group_notice || {};
+  $('#behavior-welcome').value = notice.welcome_template || '';
+  $('#behavior-leave').value = notice.leave_template || '';
+  $('#behavior-welcome-switch').value = notice.welcome === true ? 'on' : notice.welcome === false ? 'off' : '';
+  $('#behavior-leave-switch').value = notice.leave_notice === true ? 'on' : notice.leave_notice === false ? 'off' : '';
+  const globalNotice = config?.plugins?.group_notice || {};
+  $('#behavior-welcome').placeholder = globalNotice.welcome_template || '欢迎 {nickname} 加入群聊！';
+  $('#behavior-leave').placeholder = globalNotice.leave_template || '{nickname} 离开了群聊。';
   paintRoomPlugins(saved.disabled_plugins || []);
+  syncNoticePanel();
   const title = $('#behavior-room-title');
   if (title) title.textContent = room ? roomLabel(room) : '当前群';
 }
@@ -350,6 +382,7 @@ function paintRoomPlugins(disabled) {
   roomPluginSignature = signature;
   box.innerHTML = plugins.length ? plugins.map(plugin => `<label class="inline"><input type="checkbox" data-room-plugin="${escape(plugin.name)}" ${off.has(plugin.name) ? '' : 'checked'}>${escape(pluginNames[plugin.name]?.[0] || plugin.description || plugin.name)}</label>`).join('')
     : '<p class="group-name-hint">插件管理里还没有启用的功能。</p>';
+  syncNoticePanel();
 }
 function paintBehaviorRooms() {
   const list = $('#behavior-room-list');
@@ -448,8 +481,8 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit']) $('#'+id).oninput = () => { behaviorDirty = true; };
-$('#behavior-plugins').onchange = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+$('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-member-search').oninput = paintMemberPicks;
 $('#behavior-members').onclick = event => {
   const button = event.target.closest('[data-admin-wxid]');

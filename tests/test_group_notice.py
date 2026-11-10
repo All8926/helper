@@ -88,6 +88,46 @@ class GroupNoticeTests(unittest.TestCase):
             plugin.on_message(self.event(), ctx)
         self.backend.send_text.assert_not_called()
 
+    def test_room_override_changes_only_that_room(self):
+        scratch = ROOT / '.runtime/tests'
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=scratch)
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / 'members.json'
+        path.write_text(json.dumps({
+            'database_file': 'members.sqlite3',
+            'groups': {ROOM: [], OTHER: []},
+            'room_settings': {ROOM: {'plugin_options': {'group_notice': {
+                'welcome_template': '{nickname}，欢迎来到本群',
+                'leave_notice': False}}}}
+        }, ensure_ascii=False), encoding='utf-8')
+        store = MemberStore(path, ACCOUNT)
+        self.addCleanup(store.close)
+        ctx = self.context({'leave_template': '{nickname} 已离开'}, store)
+        plugin = Plugin()
+        plugin.on_load(ctx)
+        plugin.on_message(self.event(), ctx)
+        self.backend.send_text.assert_called_once_with(ROOM, '群友甲，欢迎来到本群')
+        plugin.on_message(self.event('leave'), ctx)
+        self.assertEqual(self.backend.send_text.call_count, 1)
+        plugin.on_message(self.event(room=OTHER), ctx)
+        self.backend.send_text.assert_called_with(OTHER, '欢迎 群友甲 加入群聊！')
+        plugin.on_message(self.event('leave', room=OTHER), ctx)
+        self.backend.send_text.assert_called_with(OTHER, '群友甲 已离开')
+        # 直接取文案时仍是账号模板，避免串到别的群。
+        self.assertEqual(plugin.notice_text('甲', 'join'), '欢迎 甲 加入群聊！')
+
+    def test_blank_room_template_is_inherited_and_bad_placeholder_rejected(self):
+        from wxbot_framework.room_behavior import BehaviorError, normalize_plugin_options
+        self.assertEqual(normalize_plugin_options({'group_notice': {'welcome_template': '  '}}), {})
+        self.assertEqual(
+            normalize_plugin_options({'group_notice': {'welcome': False, 'leave_template': '{nickname} 走了'}}),
+            {'group_notice': {'welcome': False, 'leave_template': '{nickname} 走了'}})
+        with self.assertRaises(BehaviorError):
+            normalize_plugin_options({'group_notice': {'welcome_template': '{name}'}})
+        with self.assertRaises(BehaviorError):
+            normalize_plugin_options({'echo': {'prefix': 'hi'}})
+
 
 class GroupNicknameStoreTests(unittest.TestCase):
     def setUp(self):
