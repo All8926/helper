@@ -208,6 +208,34 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['api_key'], '')
         self.assertGreater(len(list((self.root/'.runtime/web/backups').glob('*'))),0)
 
+    def test_model_profiles_can_be_added_and_switched_without_leaking_keys(self):
+        path = self.root/'llm_config.json'
+        data = read_json(path)
+        data.update(api_key='private-model-key', model='first-model', extra_setting='keep me')
+        path.write_text(json.dumps(data), encoding='utf-8')
+        self.controller.save_configuration({'llm': {'model': 'first-model'},
+            'llm_profile': {'action': 'save', 'id': 'current-llm', 'name': '主力'}})
+        library = read_json(self.root/'model_profiles.json')
+        self.assertEqual(library['active']['llm'], 'current-llm')
+        self.assertEqual(library['llm'][0]['name'], '主力')
+        self.assertEqual(library['llm'][0]['api_key'], 'private-model-key')
+        self.assertNotIn('private-model-key', json.dumps(self.controller.configuration()))
+        self.controller.save_configuration({'llm': {'model': 'second-model', 'api_key': 'other-secret'},
+            'llm_profile': {'action': 'add', 'id': 'current-llm', 'name': '备用'}})
+        self.assertEqual(read_json(path)['model'], 'first-model')
+        self.assertEqual(read_json(path)['api_key'], 'private-model-key')
+        self.assertEqual(read_json(path)['extra_setting'], 'keep me')
+        added = read_json(self.root/'model_profiles.json')['llm'][1]
+        self.assertEqual(added['name'], '备用')
+        self.assertEqual(added['api_key'], 'other-secret')
+        self.controller.save_configuration({'llm_profile': {'action': 'use', 'id': added['id']}})
+        self.assertEqual(read_json(path)['model'], 'second-model')
+        self.assertEqual(read_json(path)['api_key'], 'other-secret')
+        self.controller.save_configuration({'llm_profile': {'action': 'delete', 'id': 'current-llm'}})
+        self.assertEqual(read_json(self.root/'model_profiles.json')['active']['llm'], added['id'])
+        with self.assertRaises(PanelError):
+            self.controller.save_configuration({'llm_profile': {'action': 'delete', 'id': added['id']}})
+
     def test_group_edit_keeps_profiles_and_adds_nonempty_allowlist(self):
         path = self.root/'members_config.json'
         data = read_json(path)

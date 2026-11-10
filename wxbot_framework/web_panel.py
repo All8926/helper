@@ -28,6 +28,7 @@ from .runtime import BotApplication
 from .startup import scan_logged_accounts
 from .members import MemberError
 from .room_behavior import BehaviorError, normalize_personalities, normalize_room_setting, public_personalities, view_behavior, write_json
+from .model_profiles import FILENAME as PROFILE_FILENAME, ProfileError, apply_profile, load_profiles, view_library
 from .text import validate_target, validate_mentions
 from .scheduled_tasks import ScheduledTasks
 from .scheduled_actions import discover_actions
@@ -309,9 +310,11 @@ class PanelController:
             'chat_allowlist': config.get('chat_allowlist', []),
             'text_send_delay': config.get('text_send_delay', {}),
             'plugins': config.get('plugins', {})}
+        raw_models = {}
         for name, path in paths.items():
             value = deepcopy(read_json(path))
             if name in ('llm', 'tts'):
+                raw_models[name] = value
                 result[name] = {key: value[key] for key in
                     ('base_url', 'model', 'timeout_seconds', 'max_tokens', 'json_mode',
                      'token_limit_parameter', 'extra_body', 'default_voice', 'max_chars_per_clip') if key in value}
@@ -325,6 +328,7 @@ class PanelController:
                 result['history_enabled'] = value.get('history_enabled', True)
                 result['daily_clear'] = value.get('daily_clear', True)
                 result.update(view_behavior(value))
+        result['model_profiles'] = view_library(load_profiles(self.workspace / PROFILE_FILENAME), raw_models)
         return result
 
     def message_tail(self, after=0):
@@ -333,7 +337,12 @@ class PanelController:
     def _save_many(self, changes):
         backup = self.workspace / '.runtime/web/backups' / str(time.time_ns())
         backup.mkdir(parents=True)
-        originals = {path: path.read_bytes() for path in changes}
+        originals, missing = {}, set()
+        for path in changes:
+            if path.exists():
+                originals[path] = path.read_bytes()
+            else:
+                missing.add(path)
         for index, (path, raw) in enumerate(originals.items()):
             (backup / f'{index}-{path.name}').write_bytes(raw)
         written = []
@@ -343,7 +352,10 @@ class PanelController:
                 written.append(path)
         except Exception:
             for path in reversed(written):
-                path.write_bytes(originals[path])
+                if path in missing:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(originals[path])
             raise
 
     def save_configuration(self, data):
@@ -361,33 +373,25 @@ class PanelController:
                 from .pacing import TextSendDelay
                 TextSendDelay.from_config(data['text_send_delay'])
                 config['text_send_delay'] = data['text_send_delay']
+            library = None
+            profiles_path = self.workspace / PROFILE_FILENAME
             for name in ('llm', 'tts'):
-                if name not in data:
+                request = data.get(name + '_profile')
+                incoming = data.get(name)
+                if request is None and incoming is None:
                     continue
-                if name not in paths or not isinstance(data[name], dict):
+                if name not in paths or (incoming is not None and not isinstance(incoming, dict)):
                     raise PanelError('模型配置格式不正确')
-                value = read_json(paths[name])
-                fields = {'base_url', 'model', 'timeout_seconds'} | ({'max_tokens', 'json_mode', 'token_limit_parameter', 'extra_body'} if name == 'llm'
-                            else {'default_voice', 'max_chars_per_clip'})
-                for key in fields:
-                    if key in data[name]:
-                        value[key] = data[name][key]
-                key = data[name].get('api_key', '')
-                if not isinstance(key, str) or len(key) > 1024 or any(ord(ch) < 32 for ch in key):
-                    raise PanelError('API 密钥格式不正确')
-                if data[name].get('clear_api_key') is True:
-                    value['api_key'] = ''
-                elif key.strip():
-                    value['api_key'] = key.strip()
-                # 允许先保存未填密钥的模板，其余字段沿用真实客户端验证。
-                validation = dict(value, api_key=value.get('api_key') or 'validation-only')
-                if name == 'llm':
-                    from .llm import LLMClient
-                    LLMClient(validation)
-                else:
-                    from .tts import FishTTS
-                    FishTTS.from_options(validation)
-                changes[paths[name]] = value
+                if library is None:
+                    library = load_profiles(profiles_path)
+                try:
+                    library, active = apply_profile(library, name, request, incoming, read_json(paths[name]))
+                except ProfileError as error:
+                    raise PanelError(str(error)) from error
+                if active is not None:
+                    changes[paths[name]] = active
+            if library is not None:
+                changes[profiles_path] = library
             if any(key in data for key in ('groups', 'group_names', 'history_enabled', 'daily_clear')):
                 if 'members' not in paths:
                     raise PanelError('请先在主配置设置 members_config_file')

@@ -268,12 +268,7 @@ async function loadConfig() {
   groupNameDraft = new Map(Object.entries(config.group_names || {}));
   renderGroupNames(); renderDiscoveredGroups();
   fill($('#scope-form'), {chat_allowlist:config.chat_allowlist.join('\n')});
-  for (const name of ['llm','tts']) {
-    const form = $('#'+name+'-form');
-    fill(form, {...(name === 'llm' ? {json_mode:true, token_limit_parameter:'max_tokens', extra_body:{}} : {}), ...config[name]});
-    form.elements.api_key.value = ''; form.elements.clear_api_key.checked = false;
-    $('.key-state',form).textContent = config[name]?.api_key_configured ? '已配置' : '尚未配置';
-  }
+  renderModelProfiles();
   fill($('#delay-form'), config.text_send_delay);
   syncRoomBehavior();
 }
@@ -688,19 +683,72 @@ $('#confirm-plugin-reset').onclick=()=>action(()=>submitPluginSource(true));
 $('#plugin-form').onsubmit=event=>{event.preventDefault();if(!$('#save-plugin-source').disabled)action(()=>submitPluginSource());};
 $('#groups-form').onsubmit=e=>{e.preventDefault();const groups=lines(e.target.elements.groups.value);const data={groups,history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked};if(config&&Object.hasOwn(config,'group_names'))data.group_names=Object.fromEntries(groups.map(room=>[room,groupNameDraft.get(room)||'']));action(()=>save(data));};
 $('#scope-form').onsubmit=e=>{e.preventDefault();action(()=>save({chat_allowlist:lines(e.target.elements.chat_allowlist.value)}));};
-for (const name of ['llm','tts']) $('#'+name+'-form').onsubmit=e=>{
-  e.preventDefault();
-  action(()=>{
-    const values={};
-    for(const input of e.target.elements){if(!input.name)continue;values[input.name]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}
-    if(name === 'llm') {
-      try { values.extra_body=JSON.parse(values.extra_body.trim() || '{}'); }
-      catch { throw new Error('扩展参数的 JSON 格式有误，请检查逗号和引号'); }
-      if(values.extra_body === null || Array.isArray(values.extra_body) || typeof values.extra_body !== 'object')throw new Error('扩展参数应为 JSON 对象，例如 {}');
-    }
-    return save({[name]:values});
+let profileSelection = {llm:'', tts:''}, pendingProfile = null;
+function profileList(name) {
+  const saved = config?.model_profiles?.[name];
+  if (saved?.length) return saved;
+  const current = config?.[name] || {};
+  return [{id: name === 'llm' ? 'current-llm' : 'current-tts', name: '当前配置', ...current}];
+}
+function renderModelProfiles() {
+  for (const name of ['llm', 'tts']) {
+    const form = $('#' + name + '-form');
+    const select = form.querySelector('[data-profile-id]');
+    const profiles = profileList(name);
+    const active = config?.model_profiles?.active?.[name] || profiles[0]?.id || '';
+    if (pendingProfile?.kind === name && pendingProfile.action === 'add') profileSelection[name] = profiles.at(-1)?.id || active;
+    else if (!profiles.some(item => item.id === profileSelection[name])) profileSelection[name] = active;
+    select.innerHTML = profiles.map(item => `<option value="${escape(item.id)}">${escape(item.name)}${item.id === active ? ' · 使用中' : ''}</option>`).join('');
+    if (profileSelection[name]) select.value = profileSelection[name];
+    showModelProfile(name);
+  }
+  pendingProfile = null;
+}
+function showModelProfile(name) {
+  const form = $('#' + name + '-form');
+  const id = form.querySelector('[data-profile-id]').value;
+  profileSelection[name] = id;
+  const chosen = profileList(name).find(item => item.id === id) || config?.[name] || {};
+  fill(form, {...(name === 'llm' ? {json_mode:true, token_limit_parameter:'max_tokens', extra_body:{}} : {}), ...chosen});
+  form.elements.api_key.value = '';
+  form.elements.clear_api_key.checked = false;
+  $('.key-state', form).textContent = chosen.api_key_configured ? '已配置' : '尚未配置';
+  form.querySelector('[data-profile-name]').value = chosen.name || '';
+}
+function readModelForm(form, name) {
+  const values = {};
+  for (const input of form.elements) {
+    if (!input.name) continue;
+    values[input.name] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+  }
+  if (name === 'llm') {
+    try { values.extra_body = JSON.parse(values.extra_body.trim() || '{}'); }
+    catch { throw new Error('扩展参数的 JSON 格式有误，请检查逗号和引号'); }
+    if (values.extra_body === null || Array.isArray(values.extra_body) || typeof values.extra_body !== 'object') throw new Error('扩展参数应为 JSON 对象，例如 {}');
+  }
+  return values;
+}
+function profileRequest(form, action) {
+  return {action, id: form.querySelector('[data-profile-id]').value, name: form.querySelector('[data-profile-name]').value.trim()};
+}
+for (const name of ['llm','tts']) {
+  const form = $('#'+name+'-form');
+  form.onsubmit = event => {
+    event.preventDefault();
+    action(() => save({[name]: readModelForm(form, name), [name + '_profile']: profileRequest(form, 'save')}));
+  };
+  form.querySelector('[data-profile-id]').onchange = () => showModelProfile(name);
+  form.querySelector('[data-profile-add]').onclick = () => action(async () => {
+    pendingProfile = {kind: name, action: 'add'};
+    try { await save({[name]: readModelForm(form, name), [name + '_profile']: profileRequest(form, 'add')}); }
+    catch (error) { pendingProfile = null; throw error; }
   });
-};
+  form.querySelector('[data-profile-use]').onclick = () => action(() => save({[name]: readModelForm(form, name), [name + '_profile']: profileRequest(form, 'use')}));
+  form.querySelector('[data-profile-delete]').onclick = () => {
+    if (!confirm('删除这份配置？如果它正在使用，会改成剩下的第一份。')) return;
+    action(() => save({[name + '_profile']: profileRequest(form, 'delete')}));
+  };
+}
 $('#delay-form').onsubmit=e=>{e.preventDefault();const f=e.target.elements;action(()=>save({text_send_delay:{enabled:f.enabled.checked,characters_per_group:Number(f.characters_per_group.value),min_seconds:Number(f.min_seconds.value),max_seconds:Number(f.max_seconds.value)}}));};
 $('#discover-chats').onclick=()=>action(async()=>{
   const {chats}=await api('chats');discoveredGroups=chats.filter(c=>c.is_group||c.chat_id?.endsWith('@chatroom'));
