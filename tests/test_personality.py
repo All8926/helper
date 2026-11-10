@@ -31,11 +31,14 @@ class PersonalityTests(unittest.TestCase):
 
     def chat(self, text="你怎么看？", *, sequence=100, sender=CAT, at_members=(ROBOT,), **kwargs):
         msg = self.message("@机器人\u2005" + text, sequence=sequence, sender=sender,
-                           data={"at_members": at_members, "is_at_self": True, **kwargs})
+                           data={"at_members": at_members, "is_at_self": True,
+                                 "native_message_id": sequence, **kwargs})
         self.store.record(msg)
         return msg
 
     def setup_chat(self, provider=None):
+        self.backend.capabilities = ("text.quote.send",)
+        self.backend.send_quote_text = lambda room, original_id, text: self.backend.sent.append((room, text, original_id)) or True
         self.backend.send_at_text = lambda room, text, ids: self.backend.sent.append((room, text, ids)) or True
         self.ctx._llm = Mock(complete_json=provider or Mock(return_value={"reply": "这是回答。", "summary": "这是总结。"}))
         plugin = ChatPlugin()
@@ -245,8 +248,8 @@ class PersonalityTests(unittest.TestCase):
         self.assertEqual(payload["transcript"][-1]["text"], "我今天又摸鱼了")
         self.assertTrue(payload["transcript"][-1]["current"])
         self.assertNotIn(CAT, user)
-        self.assertEqual(self.backend.sent[-1][2], (CAT,))
-        self.assertTrue(self.backend.sent[-1][1].startswith("@测试成员\u2005"))
+        self.assertEqual(self.backend.sent[-1][2], msg.data["native_message_id"])
+        self.assertFalse(self.backend.sent[-1][1].startswith("@"))
 
     def test_short_mouth_dialogue_is_plain_and_keeps_real_at_and_context(self):
         self.store.set_personality(ROOM, "嘴臭")
@@ -255,8 +258,8 @@ class PersonalityTests(unittest.TestCase):
         plugin = self.setup_chat(provider)
         plugin.on_message(self.chat("我已经很强了"), self.ctx)
         sent = self.backend.sent[-1]
-        body = strip_at_labels(sent[1])
-        self.assertEqual(sent[2], (CAT,))
+        body = sent[1]
+        self.assertEqual(sent[2], 100)
         self.assertLessEqual(len(body), 20)
         self.assertTrue(body.startswith("三行代码"))
         self.assertFalse(any(char in body for char in "`#*-|"))
@@ -303,8 +306,8 @@ class PersonalityTests(unittest.TestCase):
     def test_unbound_person_can_chat_and_bot_does_not_reply_to_id_text(self):
         plugin = self.setup_chat()
         plugin.on_message(self.chat(sender="wxid_unbound"), self.ctx)
-        self.assertTrue(self.backend.sent[-1][1].startswith("@群友\u2005"))
-        self.assertEqual(self.backend.sent[-1][2], ("wxid_unbound",))
+        self.assertEqual(self.backend.sent[-1][1], "这是回答。")
+        self.assertEqual(self.backend.sent[-1][2], 100)
 
     def test_cleared_current_message_or_day_change_does_not_reuse_history(self):
         plugin = self.setup_chat()
@@ -349,7 +352,8 @@ class PersonalityTests(unittest.TestCase):
         plugin.on_message(self.chat(), self.ctx)
         self.assertGreater(len(self.backend.sent), 1)
         self.assertTrue(all(len(row[1].encode("utf-8")) <= 1023 for row in self.backend.sent))
-        self.assertTrue(all(row[2] == (CAT,) for row in self.backend.sent))
+        self.assertEqual(self.backend.sent[0][2], 100)
+        self.assertTrue(all(len(row) == 2 for row in self.backend.sent[1:]))
 
     def test_invalid_model_reply_is_reported_without_deleting_context(self):
         self.store.record(self.message("历史", sequence=1))

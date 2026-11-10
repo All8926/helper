@@ -211,10 +211,32 @@ def deliver_model_reply(ctx, message, text, *, display_name=None, delivery_guard
                 return True
         except TTSError as error:
             ctx.logger.warning("语音合成失败，回退文字：%s", error)
+    # 艾特或叫别名的文字回复先引用原消息。过长时只引用第一段，其余用普通文字续上。
+    if display_name is not None:
+        parts = split_text(text, byte_limit=1023)
+        if parts and _send_quote(ctx, message, parts[0], delivery_guard):
+            for part in parts[1:]:
+                if not ctx.reply(message, part, delivery_guard=delivery_guard):
+                    raise RuntimeError("原生回复发送未成功")
+            return True
     budget = 1023 if display_name is None else 1023 - len(('@' + display_name + '\u2005\n').encode('utf-8'))
     for part in split_text(text, byte_limit=budget):
         sent = (ctx.reply(message, part, delivery_guard=delivery_guard) if display_name is None else
                 ctx.reply_at(message, part, display_name=display_name, delivery_guard=delivery_guard))
         if not sent:
             raise RuntimeError("原生回复发送未成功")
+    return True
+
+
+def _send_quote(ctx, message, text, delivery_guard):
+    """引用发送不可用时返回 False，调用方再改用艾特。发送失败仍视为未成功。"""
+    from .quoted import QuoteError
+    from .sdk import CapabilityError
+    try:
+        sent = ctx.reply_quote(message, text, delivery_guard=delivery_guard)
+    except (CapabilityError, QuoteError, ValueError) as error:
+        ctx.logger.info("无法引用原消息，改为艾特回复：%s", error)
+        return False
+    if not sent:
+        raise RuntimeError("原生引用回复发送未成功")
     return True
