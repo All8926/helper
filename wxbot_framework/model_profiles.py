@@ -161,6 +161,12 @@ def _merge(kind, base, incoming):
         doc["api_key"] = ""
     elif key.strip():
         doc["api_key"] = key.strip()
+    if kind == "llm" and "base_url" in incoming:
+        from .llm import is_worldguide_url
+        # 跨到 WorldGuide 或离开它时，不能沿用另一家的密钥。
+        if (doc.get("api_key") and not key.strip() and incoming.get("clear_api_key") is not True
+                and is_worldguide_url(base.get("base_url")) != is_worldguide_url(doc.get("base_url"))):
+            raise ProfileError("切换 WorldGuide 接口时，请填写新接口的 API 密钥或清除已保存的密钥")
     return doc
 
 
