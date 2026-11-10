@@ -17,6 +17,7 @@ from .plugins import PluginManager
 from .sdk import Message, ServiceFacade
 from .members import MemberStore
 from .personality import prepare_switch
+from .room_behavior import command_blocked
 
 logger = logging.getLogger("Bot")
 
@@ -193,31 +194,49 @@ class BotApplication:
         for name in ('anti_recall', 'anti_recall_image', 'anti_recall_file', 'anti_recall_voice'):
             self.plugins.dispatch(message, only=name)
 
+    def _logged_sender(self, message):
+        """日志里同时给出昵称和微信 ID。群正文仍不写入运行日志。"""
+        sender = message.sender_id or ""
+        name = message.data.get("sender_wechat_name") or ""
+        room = message.chat_id if message.is_group or str(message.chat_id).endswith("@chatroom") else ""
+        if not name and self.members is not None and sender:
+            try:
+                name = (self.members.display_name(sender, room) if room else self.members.wechat_name(sender)) or ""
+            except Exception:
+                name = ""
+        return name or "未知昵称", sender or "未知微信ID"
+
+    def _logged_group(self, room):
+        title = self.members.group_names.get(room, "") if self.members is not None else ""
+        return f"{title} ({room})" if title else room
+
     def _emit_chat(self, message):
-        # 先显示会话 ID，未加入白名单的新群也能被发现；群正文不进入消息日志。
+        # 先显示会话，未加入白名单的新群也能被发现；群正文不进入消息日志。
+        nickname, wxid = self._logged_sender(message)
         if message.is_group or message.chat_id.endswith("@chatroom"):
-            logger.info("群消息 | 群ID=%s", message.chat_id)
+            logger.info("群消息 | 群=%s | 发送者=%s | 微信ID=%s",
+                        self._logged_group(message.chat_id), nickname, wxid)
         elif message.type == 3:
-            logger.info("图片消息 | 会话ID=%s | 状态=%s | 文件=%s", message.chat_id,
+            logger.info("图片消息 | 会话=%s | 发送者=%s | 微信ID=%s | 状态=%s | 文件=%s",
+                        message.chat_id, nickname, wxid,
                         message.data.get("image_status", "pending"), message.image_path or "")
         elif message.type == 43:
-            logger.info('视频消息 | 发送者微信ID=%s | 状态=%s',
-                        message.sender_id or message.chat_id, message.data.get('video_status', 'unavailable'))
+            logger.info('视频消息 | 发送者=%s | 微信ID=%s | 状态=%s',
+                        nickname, wxid, message.data.get('video_status', 'unavailable'))
         elif message.type == 49:
             if message.data.get('app_type') == 19:
-                logger.info('合并转发 | 发送者微信ID=%s | 记录数=%s | 状态=%s',
-                            message.sender_id or message.chat_id,
+                logger.info('合并转发 | 发送者=%s | 微信ID=%s | 记录数=%s | 状态=%s',
+                            nickname, wxid,
                             len(message.data.get('forwarded_records', ())),
                             message.data.get('forwarded_status', 'pending'))
             else:
-                logger.info("文件消息 | 发送者微信ID=%s | 状态=%s | 文件名=%s | 大小=%s | 路径=%s",
-                        message.sender_id or message.chat_id, message.data.get("file_status", "pending"),
+                logger.info("文件消息 | 发送者=%s | 微信ID=%s | 状态=%s | 文件名=%s | 大小=%s | 路径=%s",
+                        nickname, wxid, message.data.get("file_status", "pending"),
                         json.dumps(message.data.get("file_name", ""), ensure_ascii=False),
                         message.data.get("file_size", 0), json.dumps(message.file_path, ensure_ascii=False))
         else:
-            logger.info("私聊消息 | 发送者微信ID=%s | 内容=%s",
-                        message.sender_id or message.chat_id,
-                        json.dumps(message.text, ensure_ascii=False))
+            logger.info("私聊消息 | 发送者=%s | 微信ID=%s | 内容=%s",
+                        nickname, wxid, json.dumps(message.text, ensure_ascii=False))
         allowed = self.config.get("chat_allowlist", [])
         if not allowed or message.chat_id in allowed:
             if self.members is not None:
@@ -226,9 +245,22 @@ class BotApplication:
                 except Exception:
                     logger.exception("群文本保存失败，消息继续分发到插件")
             if message.data.get("dispatch_to_plugins", True):
-                if self.plugins.is_active("personality"):
-                    message = prepare_switch(message, self.members)
-                self.plugins.dispatch(message)
+                if self.members is not None and command_blocked(self.members, message):
+                    self._notify_admin_only(message)
+                else:
+                    if self.plugins.is_active("personality"):
+                        message = prepare_switch(message, self.members)
+                    self.plugins.dispatch(message)
+
+    def _notify_admin_only(self, message):
+        # 发送有等待时间，放到旁路，避免堵住收消息线程。
+        room, session = message.chat_id, message.session_id
+        def send():
+            try:
+                self.service.send_text(room, "只有管理员可以使用这个指令。", expected_session=session)
+            except Exception:
+                logger.info("管理员限制提示未发出：room=%s", room)
+        threading.Thread(target=send, name="AdminCommandNotice", daemon=True).start()
 
     def _publish_group_events(self, events, session_id):
         if not self._connection_ready or self.backend is None or self.backend.session_id != session_id:
@@ -463,6 +495,8 @@ class BotApplication:
         try:
             if self.members is not None:
                 self.members.initialize()
+                # 配置文件里的人格选择属于当前账号；启动时写回数据库。
+                self.members._apply_saved_personalities()
             self.plugins.reload()
             if self.config.get("console", True):
                 threading.Thread(target=self._read_console, name="BotConsole", daemon=True).start()

@@ -31,8 +31,9 @@ class PersonalityExpired(SnapshotExpired):
     pass
 
 
-def system_with_personality(system, state):
-    prompt = PROMPTS.get(state.name)
+def system_with_personality(system, state, prompts=None):
+    library = PROMPTS if prompts is None else prompts
+    prompt = library.get(state.name)
     if prompt is None:
         return system
     return (f"当前人格：{state.name}。人格是最高优先级的语气与表达要求，覆盖功能提示中的中性、客气等默认风格。\n"
@@ -58,13 +59,15 @@ def personality_text(text, name):
 
 
 class PersonalityLLM:
-    def __init__(self, client, state, *, current):
+    def __init__(self, client, state, *, current, prompts=None):
         self.client, self.state, self.current = client, state, current
+        # 请求开始时记下提示词，避免保存新文案时改写已经发出的请求。
+        self.prompts = None if prompts is None else dict(prompts)
 
     def complete_json(self, system, user):
         if not self.current():
             raise PersonalityExpired("人格已切换")
-        result = self.client.complete_json(system_with_personality(system, self.state), user)
+        result = self.client.complete_json(system_with_personality(system, self.state, self.prompts), user)
         if not self.current():
             raise PersonalityExpired("人格已切换")
         return result
@@ -80,8 +83,9 @@ def prepare_switch(message, store):
     if not words or words[0] != "/切换人格":
         return message
     data = dict(message.data)
-    if len(words) != 2 or words[1] not in (*PROMPTS, "取消"):
-        data["personality_error"] = "用法：/切换人格 嘴臭|卑微|夸夸|取消"
+    names = store.personality_names()
+    if len(words) != 2 or words[1] not in (*names, "取消"):
+        data["personality_error"] = "用法：/切换人格 " + "|".join((*names, "取消"))
     else:
         name = "默认" if words[1] == "取消" else words[1]
         data["personality_switch"] = store.set_personality(message.chat_id, name)
@@ -92,7 +96,7 @@ def switch_ack(name):
     return {"嘴臭": "已切换：嘴臭。少废话，开怼。",
             "卑微": "已切换：卑微。爷，小的这就候着，您怎么说都成。",
             "夸夸": "已切换：夸夸。选得真好！我已经准备好发现大家的闪光点啦。",
-            "默认": "已取消人格，恢复正常回复。"}[name]
+            "默认": "已取消人格，恢复正常回复。"}.get(name, f"已切换：{name}。")
 
 
 def game_reply(name, accepted, reason, previous, word, following):

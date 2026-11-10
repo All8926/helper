@@ -62,28 +62,90 @@
   </section>
   <section class="page hidden" id="page-groups" aria-labelledby="groups-heading">
     <div class="page-heading"><div><h1 id="groups-heading">群聊与会话</h1></div><button id="discover-chats" class="secondary">发现群聊</button></div>
-    <section class="settings-section manual-send" aria-labelledby="send-heading">
-      <div class="section-heading"><h2 id="send-heading">发送消息</h2><button id="refresh-send-chats" class="secondary small" type="button">刷新会话</button></div>
-      <form id="send-form">
-        <label for="send-chat">会话</label><select id="send-chat" required><option value="">选择会话</option></select>
-        <div id="send-group" class="hidden">
-          <div class="section-heading member-heading"><h3>艾特成员 <span id="mention-count" class="count">已选 0 / 8</span></h3><button id="refresh-send-members" class="text-button small" type="button">刷新成员</button></div>
-          <label class="sr-only" for="member-search">搜索群成员</label><input id="member-search" type="search" placeholder="搜索昵称、微信 ID 或身份" autocomplete="off">
-          <div class="table-container member-scroll"><table class="member-table"><thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">群成员</th><th scope="col">身份</th></tr></thead><tbody id="send-members"><tr><td colspan="3" class="table-empty">请先选择群聊。</td></tr></tbody></table></div>
-        </div>
-        <label for="send-content">正文</label><textarea id="send-content" rows="3" required placeholder="输入文字" spellcheck="false"></textarea>
-        <div class="form-footer"><p id="send-status" class="send-status" role="status" aria-live="polite"></p><button id="send-text" class="primary" type="submit" disabled>发送</button></div>
+    <div class="editor-tabs groups-tabs" role="tablist" aria-label="群聊功能">
+      <button type="button" id="groups-tab-send" role="tab" aria-selected="true" aria-controls="groups-panel-send">发送</button>
+      <button type="button" id="groups-tab-rooms" role="tab" aria-selected="false" aria-controls="groups-panel-rooms" tabindex="-1">接入群聊</button>
+      <button type="button" id="groups-tab-settings" role="tab" aria-selected="false" aria-controls="groups-panel-settings" tabindex="-1">群设置</button>
+      <button type="button" id="groups-tab-persona" role="tab" aria-selected="false" aria-controls="groups-panel-persona" tabindex="-1">人格库</button>
+    </div>
+    <div id="groups-panel-send" role="tabpanel" aria-labelledby="groups-tab-send">
+      <div class="groups-split">
+        <section class="settings-section manual-send" aria-labelledby="send-heading">
+          <div class="section-heading"><h2 id="send-heading">发送消息</h2><button id="refresh-send-chats" class="secondary small" type="button">刷新会话</button></div>
+          <form id="send-form">
+            <label for="send-chat">会话</label><select id="send-chat" required><option value="">选择会话</option></select>
+            <div id="send-group" class="hidden">
+              <div class="section-heading member-heading"><h3>艾特成员 <span id="mention-count" class="count">已选 0 / 8</span></h3><button id="refresh-send-members" class="text-button small" type="button">刷新成员</button></div>
+              <label class="sr-only" for="member-search">搜索群成员</label><input id="member-search" type="search" placeholder="搜索昵称、微信 ID 或身份" autocomplete="off">
+              <div class="table-container member-scroll"><table class="member-table"><thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">群成员</th><th scope="col">身份</th></tr></thead><tbody id="send-members"><tr><td colspan="3" class="table-empty">请先选择群聊。</td></tr></tbody></table></div>
+            </div>
+            <label for="send-content">正文</label><textarea id="send-content" rows="3" required placeholder="输入文字" spellcheck="false"></textarea>
+            <div class="form-footer"><p id="send-status" class="send-status" role="status" aria-live="polite"></p><button id="send-text" class="primary" type="submit" disabled>发送</button></div>
+          </form>
+        </section>
+        <form id="friend-add-form" class="settings-section" aria-labelledby="friend-add-heading">
+          <h2 id="friend-add-heading">添加好友</h2>
+          <label for="friend-add-wxid">微信 ID</label><input id="friend-add-wxid" required maxlength="127" placeholder="输入群成员微信 ID" autocomplete="off" spellcheck="false">
+          <label for="friend-add-message">验证消息</label><input id="friend-add-message" required maxlength="500" placeholder="输入验证消息" autocomplete="off">
+          <label for="friend-add-room">来源群（可选）</label><select id="friend-add-room"><option value="">自动匹配共同群聊</option></select>
+          <div class="form-footer"><p id="friend-add-status" class="send-status" role="status" aria-live="polite">支持添加共同群里的成员。</p><button id="friend-add-submit" class="primary" type="submit" disabled>发送好友申请</button></div>
+        </form>
+      </div>
+    </div>
+    <div id="groups-panel-rooms" class="hidden" role="tabpanel" aria-labelledby="groups-tab-rooms">
+      <div class="settings-columns">
+        <form id="groups-form" class="settings-section">
+          <div class="section-heading"><div><h2>支持的群聊</h2></div></div>
+          <label for="group-ids">群 ID（每行一个）</label><textarea id="group-ids" name="groups" rows="6" placeholder="12345678@chatroom" spellcheck="false"></textarea>
+          <div id="group-name-list" class="group-name-list" aria-label="群聊备注"></div>
+          <div class="check-row"><label><input type="checkbox" name="history_enabled">记录当天文字</label><label><input type="checkbox" name="daily_clear">每天零点清理旧记录</label></div>
+          <div class="form-footer"><span class="save-hint">停止后保存，下次启动生效</span><button class="primary" type="submit">保存群聊配置</button></div>
+        </form>
+        <section class="settings-section discovered-section"><h2>已发现的群</h2><div id="discovered-chats" class="empty">暂无已接收消息的群。</div></section>
+      </div>
+      <form id="scope-form" class="settings-section scope-section">
+        <div class="section-heading"><div><h2>收发会话白名单</h2></div></div>
+        <label for="scope-ids">会话 ID（每行一个）</label><textarea id="scope-ids" name="chat_allowlist" rows="3" placeholder="留空允许全部会话" spellcheck="false"></textarea>
+        <details class="help-details"><summary>白名单与群配置的关系</summary><p>白名单非空时，支持群会自动加入。屏蔽群需从两处移除。</p></details>
+        <div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存白名单</button></div>
       </form>
-    </section>
-    <form id="friend-add-form" class="settings-section" aria-labelledby="friend-add-heading">
-      <h2 id="friend-add-heading">添加好友</h2>
-      <label for="friend-add-wxid">微信 ID</label><input id="friend-add-wxid" required maxlength="127" placeholder="输入群成员微信 ID" autocomplete="off" spellcheck="false">
-      <label for="friend-add-message">验证消息</label><input id="friend-add-message" required maxlength="500" placeholder="输入验证消息" autocomplete="off">
-      <label for="friend-add-room">来源群（可选）</label><select id="friend-add-room"><option value="">自动匹配共同群聊</option></select>
-      <div class="form-footer"><p id="friend-add-status" class="send-status" role="status" aria-live="polite">支持添加共同群里的成员。</p><button id="friend-add-submit" class="primary" type="submit" disabled>发送好友申请</button></div>
-    </form>
-    <div class="settings-columns"><form id="groups-form" class="settings-section"><div class="section-heading"><div><h2>支持的群聊</h2></div></div><label for="group-ids">群 ID（每行一个）</label><textarea id="group-ids" name="groups" rows="7" placeholder="12345678@chatroom" spellcheck="false"></textarea><div id="group-name-list" class="group-name-list" aria-label="群聊备注"></div><div class="check-row"><label><input type="checkbox" name="history_enabled">记录当天文字</label><label><input type="checkbox" name="daily_clear">每天零点清理旧记录</label></div><div class="form-footer"><span class="save-hint">停止后保存，下次启动生效</span><button class="primary" type="submit">保存群聊配置</button></div></form><section class="settings-section discovered-section"><h2>已发现的群</h2><div id="discovered-chats" class="empty">暂无已接收消息的群。</div></section></div>
-    <form id="scope-form" class="settings-section scope-section"><div class="section-heading"><div><h2>收发会话白名单</h2></div></div><label for="scope-ids">会话 ID（每行一个）</label><textarea id="scope-ids" name="chat_allowlist" rows="4" placeholder="留空允许全部会话" spellcheck="false"></textarea><details class="help-details"><summary>白名单与群配置的关系</summary><p>白名单非空时，支持群会自动加入。屏蔽群需从两处移除。</p></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存白名单</button></div></form>
+    </div>
+    <div id="groups-panel-settings" class="hidden" role="tabpanel" aria-labelledby="groups-tab-settings">
+      <div class="behavior-layout">
+        <div class="room-pick-pane">
+          <h2>已接入的群</h2>
+          <p class="section-description">点一个群，编辑它自己的管理员、别名和人格。</p>
+          <div id="behavior-room-list" class="room-pick-list"></div>
+        </div>
+        <form id="behavior-form" class="settings-section">
+          <h2 id="behavior-room-title">当前群</h2>
+          <p class="section-description">保存后立即生效。还没填管理员时，斜杠指令仍然所有人都能用。</p>
+          <p id="behavior-empty" class="section-description hidden">先到「接入群聊」保存至少一个群。</p>
+          <div id="behavior-fields">
+            <select id="behavior-room" class="hidden" aria-hidden="true" tabindex="-1"></select>
+            <label for="behavior-personality">本群人格</label>
+            <select id="behavior-personality"></select>
+            <label for="behavior-aliases">机器人别名</label>
+            <textarea id="behavior-aliases" rows="3" placeholder="每行一个，例如小助手" spellcheck="false"></textarea>
+            <label for="behavior-admins">管理员微信 ID</label>
+            <textarea id="behavior-admins" rows="3" placeholder="每行一个 wxid" spellcheck="false" autocomplete="off"></textarea>
+            <label for="behavior-member-search">从群成员点选</label>
+            <input id="behavior-member-search" type="search" placeholder="搜索昵称或微信 ID" autocomplete="off">
+            <p id="behavior-member-hint" class="group-name-hint">连接微信并打开该群后，可以点选成员。</p>
+            <div id="behavior-members" class="member-picks"></div>
+          </div>
+          <div class="form-footer"><span class="live-hint">别名和艾特都会触发回复，需先启用「艾特对话」。成语接龙、看图猜成语不限管理员。</span><button id="save-behavior" class="primary" type="submit">保存本群</button></div>
+        </form>
+      </div>
+    </div>
+    <div id="groups-panel-persona" class="hidden" role="tabpanel" aria-labelledby="groups-tab-persona">
+        <form id="personality-form" class="settings-section">
+          <div class="section-heading"><h2>人格库</h2><button id="personality-add" class="secondary small" type="button">添加人格</button></div>
+          <p class="section-description">每个群在「群设置」里选用一份。名为「嘴臭」时，回复仍会压到 20 字以内。</p>
+          <div id="personality-list"></div>
+          <div class="form-footer"><span class="live-hint">保存后，正在使用这些人格的群会按新提示词回复。</span><button id="save-personalities" class="primary" type="submit">保存人格</button></div>
+        </form>
+    </div>
   </section>
   <section class="page hidden" id="page-tasks" aria-labelledby="tasks-heading">
     <div class="page-heading"><h1 id="tasks-heading">定时任务</h1></div>

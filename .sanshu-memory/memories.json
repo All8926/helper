@@ -1,0 +1,21 @@
+{
+  "version": "2.0",
+  "project_path": "D:\\Code\\helper",
+  "entries": [
+    {
+      "id": "88e617e7-1c88-4924-8bd9-09edf74076d2",
+      "content": "请使用 plan 工具跟踪当前工作区的开发计划：开始开发前用 set 提交完整计划；开始某一步时用 update 标记 in_progress；完成后用 update 标记 completed；结束前用 get 核对计划状态。",
+      "content_normalized": "请使用 plan 工具跟踪当前工作区的开发计划开始开发前用 set 提交完整计划开始某一步时用 update 标记 in_progress完成后用 update 标记 completed结束前用 get 核对计划状态",
+      "category": "Preference",
+      "created_at": "2026-11-10T07:01:27.054127Z",
+      "updated_at": "2026-11-10T07:01:27.054127Z"
+    }
+  ],
+  "last_dedup_at": "2026-11-10T05:41:45.396836500Z",
+  "config": {
+    "similarity_threshold": 0.7,
+    "dedup_on_startup": true,
+    "enable_dedup": true,
+    "upsert_threshold": 0.55
+  }
+}

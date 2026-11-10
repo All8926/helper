@@ -141,6 +141,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, controller.save_plugin_source(data, reset=path == '/api/plugin-reset'))
                 if path == '/api/plugin-business':
                     return self.send(200, controller.save_plugin_business(data))
+                if path == '/api/room-behavior':
+                    return self.send(200, controller.save_room_behavior(data))
                 actions = {'/api/start': lambda: controller.start(), '/api/stop': lambda: controller.stop(),
                     '/api/restart': lambda: controller.restart(),
                     '/api/account': lambda: controller.bind_account(data),

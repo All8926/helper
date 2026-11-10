@@ -1,6 +1,6 @@
 {
   "api": "v1",
-  "description": "按群切换统一的嘴臭、卑微、夸夸人格",
+  "description": "按群使用已配置的人格提示词，管理员可发送 /切换人格",
   "requires": [
     "group.text.receive",
     "group.text.send"

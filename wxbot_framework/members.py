@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -12,7 +13,11 @@ from pathlib import Path
 
 from .account import validate_account
 from .config import validate_name
+from .room_behavior import (BehaviorError, RESERVED_PERSONALITY, alias_mentioned as name_mentioned,
+                            normalize_personalities, normalize_room_setting, public_personalities, write_json)
 from .text import validate_mentions
+
+logger = logging.getLogger("Members")
 
 
 class MemberError(ValueError):
@@ -101,6 +106,13 @@ class MemberStore:
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._active_day = None
         self.groups = set(options["groups"])
+        raw_names = options.get("group_names") or {}
+        self.group_names = {}
+        if isinstance(raw_names, dict):
+            for room, title in raw_names.items():
+                if (isinstance(room, str) and isinstance(title, str) and title.strip() and
+                        len(title) <= 64 and not any(ord(ch) < 32 for ch in title)):
+                    self.group_names[room] = title.strip()
         self.profiles = []
         for room, profiles in options["groups"].items():
             validate_mentions(room, [self.account])
@@ -127,9 +139,29 @@ class MemberStore:
                 if wxid:
                     ids.add(wxid)
                 self.profiles.append((room, key, name.strip(), display.strip(), wxid, normalized))
+        self._load_behavior(options)
         self._lock = threading.RLock()
         self._db = None
         self._closed = False
+
+    def _load_behavior(self, options):
+        try:
+            items = normalize_personalities(options["personalities"] if "personalities" in options else None)
+        except BehaviorError as error:
+            raise MemberError(str(error)) from error
+        self.personalities = public_personalities(items)
+        raw_rooms = options.get("room_settings") or {}
+        if not isinstance(raw_rooms, dict):
+            raise MemberError("room_settings 应为对象")
+        names = [item["name"] for item in self.personalities]
+        self.room_settings = {}
+        for room, value in raw_rooms.items():
+            if room not in self.groups:
+                continue
+            try:
+                self.room_settings[room] = normalize_room_setting(value, names)
+            except (BehaviorError, ValueError) as error:
+                raise MemberError(str(error)) from error
 
     @classmethod
     def from_config(cls, config, directory):
@@ -313,10 +345,28 @@ class MemberStore:
                                               (self.account, room)).fetchone()
             return PersonalityState(room, row[0], row[1]) if row else PersonalityState(room)
 
-    def set_personality(self, room, name):
-        from .personality import PROMPTS
-        if room not in self.groups or (name not in PROMPTS and name != "默认"):
-            raise MemberError("人格应为 嘴臭、卑微、夸夸 或 默认，且在已启用的群中切换")
+    def personality_names(self):
+        return tuple(item["name"] for item in self.personalities)
+
+    def prompts(self):
+        return {item["name"]: item["prompt"] for item in self.personalities}
+
+    def room_admins(self, room):
+        with self._lock:
+            return tuple((self.room_settings.get(room) or {}).get("admins", ()))
+
+    def room_aliases(self, room):
+        with self._lock:
+            return tuple((self.room_settings.get(room) or {}).get("aliases", ()))
+
+    def alias_mentioned(self, room, text):
+        return name_mentioned(text, self.room_aliases(room))
+
+    def set_personality(self, room, name, *, mirror=True):
+        allowed = self.personality_names()
+        if room not in self.groups or (name not in allowed and name != RESERVED_PERSONALITY):
+            label = "、".join((*allowed, RESERVED_PERSONALITY))
+            raise MemberError(f"人格应为 {label}，且在已启用的群中切换")
         with self._lock:
             current = self.personality(room)
             if current.name == name:
@@ -326,7 +376,110 @@ class MemberStore:
                     ON CONFLICT(account,room) DO UPDATE SET name=excluded.name,
                     generation=room_personalities.generation+1 WHERE room_personalities.name<>excluded.name""",
                            (self.account, room, name))
-            return self.personality(room)
+            result = self.personality(room)
+            if mirror:
+                self._mirror_personality(room, result.name)
+            return result
+
+    def update_behavior(self, data):
+        """保存人格库或单个群的管理员、别名和启用人格，并立刻作用于当前进程。"""
+        if not isinstance(data, dict) or ("personalities" not in data and "room" not in data):
+            raise MemberError("没有要保存的群聊行为")
+        if "personalities" in data:
+            self.apply_personalities(data["personalities"])
+        if "room" in data:
+            self.apply_room(data["room"], data.get("setting"))
+
+    def apply_personalities(self, raw):
+        items = normalize_personalities(raw)
+        with self._lock:
+            old = {item["name"]: item["prompt"] for item in self.personalities}
+            for item in items:
+                previous = item["previous"]
+                source = previous or item["name"]
+                if previous and previous != item["name"]:
+                    if previous not in old:
+                        raise MemberError(f"找不到要改名的人格：{previous}")
+                    self._rename_personality(previous, item["name"])
+                if old.get(source) not in (None, item["prompt"]):
+                    self._bump_personality(item["name"])
+            new_names = {item["name"] for item in items}
+            for room in self.groups:
+                current = self.personality(room).name
+                if current not in new_names and current != RESERVED_PERSONALITY:
+                    self.set_personality(room, RESERVED_PERSONALITY, mirror=False)
+                    setting = self.room_settings.get(room)
+                    if setting is not None:
+                        setting["personality"] = RESERVED_PERSONALITY
+            self.personalities = public_personalities(items)
+            self._persist_behavior()
+
+    def apply_room(self, room, setting):
+        if room not in self.groups:
+            raise MemberError("请先把这个群加入支持的群聊")
+        cleaned = normalize_room_setting(setting, self.personality_names())
+        with self._lock:
+            previous = self.room_settings.get(room)
+            self.room_settings[room] = cleaned
+            try:
+                self._persist_room_settings()
+            except Exception:
+                if previous is None:
+                    self.room_settings.pop(room, None)
+                else:
+                    self.room_settings[room] = previous
+                raise
+            if self.personality(room).name != cleaned["personality"]:
+                self.set_personality(room, cleaned["personality"], mirror=False)
+
+    def _apply_saved_personalities(self):
+        names = set(self.personality_names())
+        for room in self.groups:
+            saved = (self.room_settings.get(room) or {}).get("personality")
+            current = self.personality(room).name
+            target = current if saved is None else saved
+            if target not in names and target != RESERVED_PERSONALITY:
+                target = RESERVED_PERSONALITY
+            if current != target:
+                self.set_personality(room, target, mirror=True)
+
+    def _rename_personality(self, source, target):
+        with self._connection() as db:
+            db.execute("""UPDATE room_personalities SET name=?, generation=generation+1
+                          WHERE account=? AND name=?""", (target, self.account, source))
+        for setting in self.room_settings.values():
+            if setting.get("personality") == source:
+                setting["personality"] = target
+
+    def _bump_personality(self, name):
+        with self._connection() as db:
+            db.execute("""UPDATE room_personalities SET generation=generation+1
+                          WHERE account=? AND name=?""", (self.account, name))
+
+    def _mirror_personality(self, room, name):
+        current = dict(self.room_settings.get(room) or {"admins": [], "aliases": [], "personality": RESERVED_PERSONALITY})
+        current["personality"] = name
+        self.room_settings[room] = current
+        try:
+            self._persist_room_settings()
+        except (OSError, json.JSONDecodeError):
+            logger.warning("人格选择未能写入配置：room=%s", room, exc_info=True)
+
+    def _persist_room_settings(self):
+        self._mutate_config(lambda raw: raw.__setitem__("room_settings", self.room_settings))
+
+    def _persist_behavior(self):
+        def mutate(raw):
+            raw["personalities"] = self.personalities
+            raw["room_settings"] = self.room_settings
+        self._mutate_config(mutate)
+
+    def _mutate_config(self, mutate):
+        raw = json.loads(self.config_file.read_text(encoding="utf-8-sig"))
+        if not isinstance(raw, dict):
+            raise MemberError("成员配置应包含 groups 对象")
+        mutate(raw)
+        write_json(self.config_file, raw)
 
     def personality_is_current(self, state):
         return self.personality(state.room) == state

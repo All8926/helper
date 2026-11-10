@@ -167,6 +167,7 @@ class RobotProxy:
     def restart(self): return self.request('restart', {})
     def bind_account(self, data): return self.request('account', data)
     def save_configuration(self, data): return self.request('config', data)
+    def save_room_behavior(self, data): return self.request('room-behavior', data)
     def plugin_action(self, data): return self.request('plugin', data)
     def plugin_editor(self, name):
         from urllib.parse import urlencode

@@ -40,6 +40,8 @@ let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGenera
 let sendChatsAttempted = false;
 let taskRows=[], taskActions=[], taskActionSignature='', taskGeneration=0, taskLoading=false, taskLastFetch=0, taskSignature='';
 let groupNameDraft = new Map(), discoveredGroups = [];
+let behaviorRoom = '', behaviorDraft = new Map(), behaviorDirty = false, behaviorMembers = [], memberPickGeneration = 0;
+let personalityItems = [], personalityDirty = false;
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
 const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
@@ -116,7 +118,8 @@ function renderState() {
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form):not(#behavior-form):not(#personality-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  for (const id of ['save-behavior', 'save-personalities']) $('#'+id).disabled=unavailable||!state||busy;
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
   renderContacts();
@@ -268,21 +271,126 @@ async function loadConfig() {
     $('.key-state',form).textContent = config[name]?.api_key_configured ? '已配置' : '尚未配置';
   }
   fill($('#delay-form'), config.text_send_delay);
+  syncRoomBehavior();
 }
 const lines = value => [...new Set(value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean))];
+function discoveredName(room) {
+  return discoveredGroups.find(item => item.chat_id === room)?.name || '';
+}
+function roomTitle(room) {
+  return config?.group_names?.[room] || discoveredName(room) || '';
+}
+function roomLabel(room) {
+  const name = roomTitle(room);
+  return name ? name + ' · ' + room : room;
+}
+function readBehaviorForm() {
+  return {admins: lines($('#behavior-admins').value), aliases: lines($('#behavior-aliases').value), personality: $('#behavior-personality').value || '默认'};
+}
+function syncRoomBehavior() {
+  const rooms = config?.groups || [];
+  $('#behavior-empty').classList.toggle('hidden', rooms.length > 0);
+  $('#behavior-fields').classList.toggle('hidden', rooms.length === 0);
+  if (!behaviorDirty) {
+    if (!rooms.includes(behaviorRoom)) behaviorRoom = rooms[0] || '';
+    behaviorDraft = new Map();
+  }
+  const selected = behaviorRoom;
+  $('#behavior-room').innerHTML = rooms.map(room => `<option value="${escape(room)}">${escape(roomLabel(room))}</option>`).join('');
+  if (rooms.includes(selected)) $('#behavior-room').value = selected;
+  paintBehaviorRooms();
+  fillPersonalityChoices();
+  if (!behaviorDirty) {
+    showBehavior(behaviorRoom);
+    if (behaviorRoom) loadMemberPicks();
+  }
+  if (!personalityDirty) {
+    personalityItems = (config?.personalities || []).map(item => ({name: item.name, prompt: item.prompt, previous: item.name}));
+    paintPersonalities();
+  }
+}
+function fillPersonalityChoices() {
+  const names = (config?.personalities || []).map(item => item.name);
+  const current = $('#behavior-personality').value;
+  $('#behavior-personality').innerHTML = ['默认', ...names].map(name => `<option value="${escape(name)}">${escape(name === '默认' ? '默认（不使用人格）' : name)}</option>`).join('');
+  if (['默认', ...names].includes(current)) $('#behavior-personality').value = current;
+}
+function showBehavior(room) {
+  const saved = behaviorDraft.get(room) || config?.room_settings?.[room] || {};
+  $('#behavior-admins').value = (saved.admins || []).join('\n');
+  $('#behavior-aliases').value = (saved.aliases || []).join('\n');
+  const names = (config?.personalities || []).map(item => item.name);
+  const selected = names.includes(saved.personality) ? saved.personality : '默认';
+  $('#behavior-personality').value = selected;
+  const title = $('#behavior-room-title');
+  if (title) title.textContent = room ? roomLabel(room) : '当前群';
+}
+function paintBehaviorRooms() {
+  const list = $('#behavior-room-list');
+  if (!list) return;
+  const rooms = config?.groups || [];
+  list.innerHTML = rooms.length ? rooms.map(room => {
+    const setting = behaviorDraft.get(room) || config?.room_settings?.[room] || {};
+    const persona = setting.personality && setting.personality !== '默认' ? setting.personality : '默认人格';
+    const alias = (setting.aliases || [])[0];
+    const title = roomTitle(room) || '未命名群';
+    return `<button type="button" class="room-pick" data-behavior-room="${escape(room)}" aria-pressed="${room === behaviorRoom}"><span class="room-pick-text"><strong>${escape(title)}</strong><small>${escape(room)}</small></span><small>${escape(alias ? persona + ' · ' + alias : persona)}</small></button>`;
+  }).join('') : '<p class="empty">还没有已保存的群。先到「接入群聊」添加。</p>';
+}
+const groupsTabIds = ['send', 'rooms', 'settings', 'persona'];
+function showGroupsTab(name) {
+  for (const id of groupsTabIds) {
+    const active = id === name;
+    const tab = $('#groups-tab-' + id);
+    const panel = $('#groups-panel-' + id);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    panel.classList.toggle('hidden', !active);
+  }
+}
+function paintPersonalities() {
+  $('#personality-list').innerHTML = personalityItems.length ? personalityItems.map((item, index) =>
+    `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><label>提示词<textarea data-personality-prompt rows="4" spellcheck="false">${escape(item.prompt)}</textarea></label></div>`).join('')
+    : '<p class="section-description">还没有人格。未保存过时会使用内置的嘴臭、卑微和夸夸。</p>';
+}
+function paintMemberPicks() {
+  const query = $('#behavior-member-search').value.trim().toLowerCase();
+  const rows = behaviorMembers.filter(member => !query || [member.nickname, member.wechat_name, member.wxid].join(' ').toLowerCase().includes(query)).slice(0, 40);
+  $('#behavior-members').innerHTML = rows.map(member => {
+    const role = member.is_owner ? '群主' : member.is_admin ? '群管理员' : '';
+    const name = member.nickname || member.wxid;
+    return `<button type="button" class="secondary small" data-admin-wxid="${escape(member.wxid)}">${escape(name)}${role ? ' · ' + role : ''}</button>`;
+  }).join('');
+}
+async function loadMemberPicks() {
+  const generation = ++memberPickGeneration, room = behaviorRoom;
+  behaviorMembers = []; paintMemberPicks();
+  if (!room) { $('#behavior-member-hint').textContent = ''; return; }
+  $('#behavior-member-hint').textContent = '正在读取群成员…';
+  try {
+    const data = await api('group-members?room=' + encodeURIComponent(room));
+    if (generation !== memberPickGeneration) return;
+    behaviorMembers = data.members || [];
+    $('#behavior-member-hint').textContent = behaviorMembers.length ? '点选成员可填入上方的管理员列表。' : '还没有读到群成员。可以先在微信里打开这个群。';
+    paintMemberPicks();
+  } catch {
+    if (generation !== memberPickGeneration) return;
+    $('#behavior-member-hint').textContent = '微信未连接时，可以直接填写微信 ID。';
+  }
+}
 function renderGroupNames() {
   const rooms = lines($('#group-ids').value);
   const supported = !!config && Object.hasOwn(config, 'group_names');
-  $('#group-name-list').innerHTML = rooms.length ? '<h3 class="group-name-heading">群聊备注</h3>' +
-    (supported ? '' : '<p class="group-name-hint">请重启管理台后编辑群备注。</p>') + rooms.map((room, index) =>
-    `<div class="group-name-row"><label for="group-name-${index}">${escape(room)}</label><input id="group-name-${index}" data-group-name="${escape(room)}" value="${escape(groupNameDraft.get(room) || '')}" maxlength="64" placeholder="填写备注" autocomplete="off" ${supported ? '' : 'disabled'}></div>`).join('') : '';
+  $('#group-name-list').innerHTML = rooms.length ? '<h3 class="group-name-heading">群名称</h3>' +
+    (supported ? '' : '<p class="group-name-hint">请重启管理台后编辑群名称。</p>') + rooms.map((room, index) =>
+    `<div class="group-name-row"><div class="group-name-meta"><label for="group-name-${index}">显示名称</label><small>${escape(room)}</small></div><input id="group-name-${index}" data-group-name="${escape(room)}" value="${escape(groupNameDraft.get(room) || discoveredName(room))}" maxlength="64" placeholder="例如：项目群" autocomplete="off" ${supported ? '' : 'disabled'}></div>`).join('') : '';
 }
 function renderDiscoveredGroups() {
   const node = $('#discovered-chats');
   node.className = discoveredGroups.length ? '' : 'empty';
   node.innerHTML = discoveredGroups.map(c => {
     const name = config?.group_names?.[c.chat_id] || c.name || '';
-    return `<div class="chat-row"><div>${escape(name || c.chat_id)}${name ? `<small>${escape(c.chat_id)}</small>` : ''}</div><button class="secondary small" data-room="${escape(c.chat_id)}">填入列表</button></div>`;
+    return `<div class="chat-row"><div><strong>${escape(name || '未命名群')}</strong><small>${escape(c.chat_id)}</small></div><button class="secondary small" data-room="${escape(c.chat_id)}">填入列表</button></div>`;
   }).join('') || '暂无已接收消息的群。';
 }
 $('#group-ids').addEventListener('input', renderGroupNames);
@@ -291,6 +399,80 @@ $('#group-name-list').addEventListener('input', event => {
   if (input) groupNameDraft.set(input.dataset.groupName, input.value);
 });
 async function save(data, message) { await api('config',data); await loadConfig(); toast(message||'配置已保存，下次启动生效'); }
+$('#behavior-room-list').onclick = event => {
+  const button = event.target.closest('[data-behavior-room]');
+  if (!button || button.dataset.behaviorRoom === behaviorRoom) return;
+  if (behaviorDirty && behaviorRoom) behaviorDraft.set(behaviorRoom, readBehaviorForm());
+  behaviorRoom = button.dataset.behaviorRoom;
+  $('#behavior-room').value = behaviorRoom;
+  showBehavior(behaviorRoom);
+  paintBehaviorRooms();
+  loadMemberPicks();
+};
+for (const id of groupsTabIds) {
+  const tab = $('#groups-tab-' + id);
+  tab.onclick = () => showGroupsTab(id);
+  tab.onkeydown = event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = groupsTabIds.indexOf(id);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? groupsTabIds.length - 1 : event.key === 'ArrowLeft' ? index - 1 : index + 1;
+    const target = groupsTabIds[(next + groupsTabIds.length) % groupsTabIds.length];
+    showGroupsTab(target);
+    $('#groups-tab-' + target).focus();
+  };
+}
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality']) $('#'+id).oninput = () => { behaviorDirty = true; };
+$('#behavior-member-search').oninput = paintMemberPicks;
+$('#behavior-members').onclick = event => {
+  const button = event.target.closest('[data-admin-wxid]');
+  if (!button) return;
+  const wxid = button.dataset.adminWxid;
+  const current = lines($('#behavior-admins').value);
+  $('#behavior-admins').value = (current.includes(wxid) ? current.filter(item => item !== wxid) : [...current, wxid]).join('\n');
+  behaviorDirty = true;
+};
+$('#behavior-form').onsubmit = event => {
+  event.preventDefault();
+  action(async () => {
+    const room = $('#behavior-room').value;
+    if (!room) throw new Error('请先添加并保存支持的群聊');
+    await api('room-behavior', {room, setting: readBehaviorForm()});
+    behaviorDirty = false;
+    behaviorDraft.clear();
+    await loadConfig();
+    toast('本群行为已生效');
+  });
+};
+$('#personality-add').onclick = () => {
+  personalityItems.push({name: '', prompt: '', previous: ''});
+  personalityDirty = true;
+  paintPersonalities();
+};
+$('#personality-list').oninput = event => {
+  const card = event.target.closest('[data-index]');
+  if (!card) return;
+  const item = personalityItems[Number(card.dataset.index)];
+  if (event.target.matches('[data-personality-name]')) item.name = event.target.value;
+  if (event.target.matches('[data-personality-prompt]')) item.prompt = event.target.value;
+  personalityDirty = true;
+};
+$('#personality-list').onclick = event => {
+  const button = event.target.closest('[data-personality-remove]');
+  if (!button) return;
+  personalityItems.splice(Number(button.closest('[data-index]').dataset.index), 1);
+  personalityDirty = true;
+  paintPersonalities();
+};
+$('#personality-form').onsubmit = event => {
+  event.preventDefault();
+  action(async () => {
+    config = await api('room-behavior', {personalities: personalityItems.map(item => ({name: item.name.trim(), prompt: item.prompt.trim(), previous: item.previous || ''}))});
+    personalityDirty = false;
+    syncRoomBehavior();
+    toast('人格提示词已生效');
+  });
+};
 $('#start-selected').onclick = () => action(()=>launchAccounts(loggedAccounts.filter(row=>selectedAccounts.has(accountKey(row))&&row.selectable&&!activeStates.includes(row.state))));
 $('#refresh-accounts').onclick=()=>loadAccounts();
 $('#account-list').onchange=event=>{
@@ -444,7 +626,7 @@ $('#discover-chats').onclick=()=>action(async()=>{
   const {chats}=await api('chats');discoveredGroups=chats.filter(c=>c.is_group||c.chat_id?.endsWith('@chatroom'));
   renderDiscoveredGroups();
 });
-$('#discovered-chats').onclick=e=>{const button=e.target.closest('[data-room]');if(!button)return;const field=$('#groups-form').elements.groups;field.value=[...new Set([...lines(field.value),button.dataset.room])].join('\n');renderGroupNames();toast('已填入，停止机器人后保存群聊配置');};
+$('#discovered-chats').onclick=e=>{const button=e.target.closest('[data-room]');if(!button)return;const room=button.dataset.room;const field=$('#groups-form').elements.groups;field.value=[...new Set([...lines(field.value),room])].join('\n');if(!groupNameDraft.get(room)){const known=config?.group_names?.[room]||discoveredName(room);if(known)groupNameDraft.set(room,known);}renderGroupNames();toast('已填入，停止机器人后保存群聊配置');};
 
 const roleLabels = {owner:'群主', admin:'群管理员', member:'普通群友', unknown:'身份未知'};
 function sendFeedback(text, error=false) {
@@ -832,6 +1014,7 @@ async function switchRobot(identifier){
   state=null;config=null;logs=[];logCursor=0;selectedPlugin='';renderLogs();
   renderState();renderAccounts();
   groupNameDraft=new Map(); discoveredGroups=[]; $('#group-ids').value=''; renderGroupNames(); renderDiscoveredGroups();
+  behaviorRoom=''; behaviorDraft=new Map(); behaviorDirty=false; personalityDirty=false; behaviorMembers=[];
   await loadConfig();await poll();navigate();
 }
 $('#robot-select').onchange=event=>{

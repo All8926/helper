@@ -26,6 +26,8 @@ from .plugin_sources import PluginSources
 from .plugin_business import view as business_view, merge as merge_business
 from .runtime import BotApplication
 from .startup import scan_logged_accounts
+from .members import MemberError
+from .room_behavior import BehaviorError, normalize_personalities, normalize_room_setting, public_personalities, view_behavior, write_json
 from .text import validate_target, validate_mentions
 from .scheduled_tasks import ScheduledTasks
 from .scheduled_actions import discover_actions
@@ -322,6 +324,7 @@ class PanelController:
                 result['group_names'] = value.get('group_names', {})
                 result['history_enabled'] = value.get('history_enabled', True)
                 result['daily_clear'] = value.get('daily_clear', True)
+                result.update(view_behavior(value))
         return result
 
     def message_tail(self, after=0):
@@ -426,6 +429,60 @@ class PanelController:
                 changes[paths['members']] = members
             changes[self.store.path] = config
             self._save_many(changes)
+
+    def save_room_behavior(self, data):
+        """管理员、别名和人格在机器人运行时也可以保存，并立刻作用于当前进程。"""
+        if not isinstance(data, dict):
+            raise PanelError('配置格式不正确')
+        with self.lock:
+            if self.state == 'stopping' or self.stop_event.is_set():
+                raise PanelError('机器人正在停止，请稍后重试', 409)
+            app = self.app
+        try:
+            members = getattr(app, 'members', None) if app is not None else None
+            if members is not None:
+                members.update_behavior(data)
+            else:
+                self._write_behavior_file(data)
+        except (BehaviorError, MemberError, ValueError) as error:
+            raise PanelError(str(error)) from None
+        return self.configuration()
+
+    def _write_behavior_file(self, data):
+        config = self.store.load()
+        paths = self._paths(config)
+        if 'members' not in paths:
+            raise PanelError('请先在主配置设置 members_config_file')
+        members = read_json(paths['members'])
+        groups = members.get('groups', {})
+        if not isinstance(groups, dict):
+            raise PanelError('成员配置损坏')
+        if 'personalities' in data:
+            items = normalize_personalities(data['personalities'])
+            rename = {item['previous']: item['name'] for item in items if item['previous'] and item['previous'] != item['name']}
+            names = {item['name'] for item in items}
+            settings = members.get('room_settings') if isinstance(members.get('room_settings'), dict) else {}
+            for setting in settings.values():
+                if not isinstance(setting, dict):
+                    continue
+                personality = rename.get(setting.get('personality', '默认'), setting.get('personality', '默认'))
+                if personality not in names and personality != '默认':
+                    personality = '默认'
+                setting['personality'] = personality
+            members['personalities'] = public_personalities(items)
+            members['room_settings'] = settings
+        if 'room' in data:
+            room = data.get('room')
+            if not isinstance(room, str) or room not in groups or not room.endswith('@chatroom'):
+                raise PanelError('请先把这个群加入支持的群聊')
+            stored = normalize_personalities(members['personalities'] if 'personalities' in members else None)
+            setting = normalize_room_setting(data.get('setting'), [item['name'] for item in stored])
+            room_settings = members.get('room_settings') if isinstance(members.get('room_settings'), dict) else {}
+            room_settings[room] = setting
+            members['room_settings'] = room_settings
+        if 'personalities' not in data and 'room' not in data:
+            raise PanelError('没有要保存的群聊行为')
+        write_json(paths['members'], members)
 
     def plugin_action(self, data):
         name, action = validate_name(data.get('name')), data.get('action')

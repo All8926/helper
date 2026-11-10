@@ -1,8 +1,9 @@
-"""真正艾特机器人后，用本群人格回复当前发言者。"""
+"""真正艾特机器人，或叫到本群配置的别名后，用本群人格回复。"""
 from wxbot_framework.dialogue import Dialogue
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import SnapshotExpired
 from wxbot_framework.personality import personality_text
+from wxbot_framework.room_behavior import is_slash_command
 from wxbot_framework.speech import deliver_model_reply
 
 
@@ -14,10 +15,7 @@ class Plugin:
         ctx.llm  # 启动时核对配置，不请求接口。
 
     def on_message(self, message, ctx):
-        if (message.type != 1 or not message.is_group or message.chat_id not in self.members.groups or
-                "WXBOT_AT_CHAT_PROBE" in message.text or
-                message.data.get("bot_generated") or not message.data.get("is_at_self") or
-                self.members.account not in message.data.get("at_members", ())):
+        if not self._addressed(message):
             return
         personality = ctx.personality(message)
         try:
@@ -34,6 +32,16 @@ class Plugin:
                 ctx.reply(message, "暂时无法回复，请稍后再艾特我。", delivery_guard=guard)
             except SnapshotExpired:
                 pass
+
+    def _addressed(self, message):
+        """艾特机器人，或正文里出现本群别名，都进入同一套回复。斜杠指令留给对应功能。"""
+        if (message.type != 1 or not message.is_group or message.chat_id not in self.members.groups or
+                "WXBOT_AT_CHAT_PROBE" in message.text or message.data.get("bot_generated") or
+                is_slash_command(message.text)):
+            return False
+        mentioned = bool(message.data.get("is_at_self") and
+                         self.members.account in message.data.get("at_members", ()))
+        return mentioned or self.members.alias_mentioned(message.chat_id, message.text)
 
     def reply_to_member(self, message, ctx, snapshot, personality, delivery_guard):
         """上下文已准备好，在这里生成并发送给群友的回复。"""
