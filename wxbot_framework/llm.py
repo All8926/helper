@@ -94,7 +94,30 @@ class LLMClient:
     def from_file(cls, path):
         return cls(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
-    def complete_json(self, system, user, image=None):
+    def _apply_thinking(self, payload, enabled):
+        """按群开关写各家的思考字段。扩展参数里已经写过的项不覆盖。"""
+        name = self.model.lower()
+        extra = self.extra_body
+        if "qwen" in name or name.startswith("qwq"):
+            if "enable_thinking" not in extra:
+                payload["enable_thinking"] = bool(enabled)
+            return
+        if "grok" in name:
+            # Grok 4.5 及以后不能完全关闭思考，关掉时只用最低强度。
+            if not enabled:
+                payload["reasoning_effort"] = "low"
+            elif "reasoning_effort" not in extra:
+                payload["reasoning_effort"] = "high"
+            return
+        if "doubao" in name or name.startswith("seed"):
+            if "thinking" not in extra:
+                payload["thinking"] = {"type": "enabled" if enabled else "disabled"}
+            return
+        if (self._deepseek_official and name in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat")
+                and not {"thinking", "reasoning_effort"}.intersection(extra)):
+            payload["thinking"] = {"type": "enabled" if enabled else "disabled"}
+
+    def complete_json(self, system, user, image=None, *, thinking=True):
         json_instruction = "\n\n请只返回一个有效的 JSON 对象，不要使用 Markdown 代码围栏或附加说明。"
         if not self.json_mode:
             system += json_instruction
@@ -114,11 +137,7 @@ class LLMClient:
                    self.token_limit_parameter: self.max_tokens, "stream": False, **self.extra_body}
         if self.json_mode:
             payload["response_format"] = {"type": "json_object"}
-        # 保留官方 DeepSeek 旧版的非思考行为；兼容网关不携带专属参数。
-        # 用户显式指定的思考设置始终优先，旧的 reasoner 模型也不强制关闭。
-        if (self._deepseek_official and self.model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat")
-                and not {"thinking", "reasoning_effort"}.intersection(self.extra_body)):
-            payload["thinking"] = {"type": "disabled"}
+        self._apply_thinking(payload, thinking)
         allow_fenced = not self.json_mode
         # 看图要上传图片，短超时很容易失败；不超过配置允许的 60 秒。
         wait = min(60, max(self.timeout, 45)) if image is not None else self.timeout

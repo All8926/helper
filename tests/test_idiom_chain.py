@@ -18,7 +18,7 @@ class JSONClient:
     def __init__(self, result):
         self.result = result
 
-    def complete_json(self, system, user):
+    def complete_json(self, system, user, **_kwargs):
         return self.result
 
 

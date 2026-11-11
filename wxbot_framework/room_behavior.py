@@ -156,6 +156,15 @@ def normalize_activity(value, legacy=None):
     return value
 
 
+def normalize_deep_thinking(value):
+    """没填时开启。只对 DeepSeek 官方接口生效。"""
+    if value is None:
+        return True
+    if type(value) is not bool:
+        raise BehaviorError("深度思考应为开或关")
+    return value
+
+
 def normalize_glance_minutes(value):
     """群里在聊时隔几分钟让模型看一眼。没填时 2 分钟，0 表示不看。"""
     if value is None:
@@ -241,6 +250,7 @@ def normalize_room_setting(value, names):
             "context_limit": normalize_context_limit(value.get("context_limit")),
             "activity": normalize_activity(value.get("activity"), value.get("proactive_enabled")),
             "glance_minutes": normalize_glance_minutes(value.get("glance_minutes")),
+            "deep_thinking": normalize_deep_thinking(value.get("deep_thinking")),
             "plugin_options": normalize_plugin_options(value.get("plugin_options"))}
 
 

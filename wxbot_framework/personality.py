@@ -1,5 +1,6 @@
 """统一人格提示词：群设置决定语气，功能约束决定事实及结构。"""
 from dataclasses import dataclass, replace
+import inspect
 import re
 from types import MappingProxyType
 
@@ -64,20 +65,30 @@ def personality_text(text, name):
     return text[:20].rstrip()
 
 
-class PersonalityLLM:
-    def __init__(self, client, state, *, current, prompts=None, guard=None):
+def _complete(client, system, user, *, image=None, thinking=True):
+    """测试替身不一定接收思考开关，只在目标函数声明了该参数时传入。"""
+    kwargs = {}
+    if image is not None:
+        kwargs["image"] = image
+    try:
+        parameters = inspect.signature(client.complete_json).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if any(item.kind == inspect.Parameter.VAR_KEYWORD or item.name == "thinking" for item in parameters.values()):
+        kwargs["thinking"] = thinking
+    return client.complete_json(system, user, **kwargs)
+    def __init__(self, client, state, *, current, prompts=None, guard=None, thinking=True):
         self.client, self.state, self.current = client, state, current
         # 请求开始时记下提示词，避免保存新文案时改写已经发出的请求。
         self.prompts = None if prompts is None else dict(prompts)
         self.guard = guard
+        self.thinking = thinking is not False
 
     def complete_json(self, system, user, image=None):
         if not self.current():
             raise PersonalityExpired("人格已切换")
         prepared = system_with_personality(system, self.state, self.prompts, self.guard)
-        # 没图时保持原来的两个参数，避免文字调用把空图片传下去。
-        result = (self.client.complete_json(prepared, user, image=image) if image else
-                  self.client.complete_json(prepared, user))
+        result = _complete(self.client, prepared, user, image=image, thinking=self.thinking)
         if not self.current():
             raise PersonalityExpired("人格已切换")
         return result

@@ -164,7 +164,7 @@
 
 关闭 JSON 模式后，程序会通过提示词要求模型返回 JSON，并允许完整包在代码围栏中的 JSON 对象；成语接龙、总结和对话仍需要模型正确输出 JSON，普通文字不能作为结构化结果使用。网页中的这三项设置位于“大模型 → 高级选项”。
 
-官方 `https://api.deepseek.com` 的 `deepseek-flash`、`deepseek-v4-flash`、`deepseek-v4-pro` 和 `deepseek-chat` 默认关闭思考，保留旧版的快速回复行为；旧的 `deepseek-reasoner` 不强制关闭。可在 `extra_body` 中显式设置 `thinking` 或 `reasoning_effort` 覆盖默认行为，例如 `{"thinking":{"type":"enabled"}}`。使用其他域名的兼容网关时不会自动添加这些字段；如有需要，按服务商文档填写。切换服务时请检查或清空扩展参数。
+每个群可以在群设置里开关深度思考，没关过的群默认开启。DeepSeek 官方接口和豆包使用 `thinking`，千问使用 `enable_thinking`，Grok 只能在高、低思考强度之间切换。旧的 `deepseek-reasoner` 不自动改这个字段。`extra_body` 里已经写了对应字段时，以扩展参数为准。其他未识别的模型不会自动添加这些字段。
 
 若接口正常结束却返回空正文，最多重试一次。官方 DeepSeek 的 JSON 模式可能[偶发空正文](https://api-docs.deepseek.com/guides/json_mode/)，重试时改用提示词 JSON 输出，结果仍须通过严格 JSON 校验；不会把思考过程当成回复。HTTP 错误、超时、内容过滤、拒绝、工具调用或令牌截断不会自动重试。若持续出现空正文，可在网页高级选项中关闭 JSON 模式。
 

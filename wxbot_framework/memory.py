@@ -143,7 +143,7 @@ class MemoryWorker:
         previous = self.members.facts_for(room, sender_id)
         result = self.ctx.llm.complete_json(FACT_SYSTEM, json.dumps(
             {"name": name, "existing": list(previous), "user": user_text, "reply": reply},
-            ensure_ascii=False))
+            ensure_ascii=False), thinking=self.members.room_deep_thinking(room))
         facts = normalize_facts(result, previous)
         if facts == previous:
             return
@@ -157,7 +157,8 @@ class MemoryWorker:
                 continue
             try:
                 result = self.ctx.llm.complete_json(DIARY_SYSTEM, json.dumps(
-                    {"date": day, "chat": source}, ensure_ascii=False))
+                    {"date": day, "chat": source}, ensure_ascii=False),
+                    thinking=self.members.room_deep_thinking(room))
                 summary = normalize_summary(result)
                 if summary is None:
                     raise ValueError("群日记格式不正确")

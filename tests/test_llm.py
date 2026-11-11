@@ -44,14 +44,35 @@ class LLMTests(unittest.TestCase):
         self.assertEqual(payload["model"], "deepseek-flash")
         self.assertEqual(payload["messages"][1]["content"], "中文")
         self.assertEqual(payload["response_format"], {"type": "json_object"})
-        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
         self.assertEqual(call.call_args.kwargs["timeout"], 20)
 
-    def test_v4_flash_also_defaults_to_no_thinking(self):
+    def test_v4_flash_defaults_to_deep_thinking(self):
         client = LLMClient({**self.options, "model": "deepseek-v4-flash"})
         with patch("wxbot_framework.llm.urlopen", return_value=self.response("{}")) as call:
             client.complete_json("JSON", "测试")
+        self.assertEqual(json.loads(call.call_args.args[0].data)["thinking"], {"type": "enabled"})
+
+    def test_group_can_turn_deep_thinking_off(self):
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response("{}")) as call:
+            self.client.complete_json("JSON", "测试", thinking=False)
         self.assertEqual(json.loads(call.call_args.args[0].data)["thinking"], {"type": "disabled"})
+
+    def test_doubao_qwen_and_grok_follow_the_same_switch(self):
+        cases = (
+            ("doubao-seed-2-0-lite", True, "thinking", {"type": "enabled"}),
+            ("doubao-seed-2-0-lite", False, "thinking", {"type": "disabled"}),
+            ("qwen3.8-max", True, "enable_thinking", True),
+            ("qwen3.8-max", False, "enable_thinking", False),
+            ("grok-4.7", True, "reasoning_effort", "high"),
+            ("grok-4.7", False, "reasoning_effort", "low"),
+        )
+        for model, enabled, field, value in cases:
+            with self.subTest(model=model, enabled=enabled):
+                client = LLMClient({**self.options, "base_url": "https://gateway.example.test/v1", "model": model})
+                with patch("wxbot_framework.llm.urlopen", return_value=self.response("{}")) as call:
+                    client.complete_json("JSON", "测试", thinking=enabled)
+                self.assertEqual(json.loads(call.call_args.args[0].data)[field], value)
 
     def test_compatible_gateway_preserves_version_path_without_vendor_parameters(self):
         self.client = LLMClient({**self.options, "base_url": "https://gateway.example.test/v1/", "model": "custom-model"})
@@ -144,7 +165,7 @@ class LLMTests(unittest.TestCase):
         first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
         self.assertEqual(first, second)
         self.assertEqual(first["response_format"], {"type": "json_object"})
-        self.assertEqual(first["thinking"], {"type": "disabled"})
+        self.assertEqual(first["thinking"], {"type": "enabled"})
         self.assertTrue(self.client.json_mode)
 
     def test_gateway_empty_response_retry_keeps_configured_protocol(self):

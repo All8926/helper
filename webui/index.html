@@ -140,6 +140,8 @@
             <label for="behavior-voice">语音回复<select id="behavior-voice"><option value="off">关闭（文字）</option><option value="always">始终语音</option><option value="auto">自动</option></select></label>
             <label for="behavior-voice-id">本群音色 ID<input id="behavior-voice-id" spellcheck="false" autocomplete="off" placeholder="留空则用模型与语音里的默认音色 ID"></label>
             <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念，自动按刚才的对话决定。音色填 ID，留空时使用「模型与语音」里的默认音色 ID。也可以在群里用 /音色 名称 选择。</p>
+            <label class="inline" for="behavior-thinking"><input id="behavior-thinking" type="checkbox" checked>深度思考</label>
+            <p class="group-name-hint">默认开启。DeepSeek 和豆包会打开或关闭深度思考，千问会打开或关闭思考，Grok 只会把思考强度调到高或低。扩展参数里已经写过的思考项仍然优先。</p>
             <label for="behavior-admins">管理员微信 ID</label>
             <textarea id="behavior-admins" rows="3" placeholder="每行一个 wxid" spellcheck="false" autocomplete="off"></textarea>
             <div class="member-pick-head">

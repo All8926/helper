@@ -754,6 +754,15 @@ class MemberStore:
         except BehaviorError:
             return DEFAULT_GLANCE_MINUTES
 
+    def room_deep_thinking(self, room):
+        """本群是否让 DeepSeek 先思考。没写过时开启。"""
+        from .room_behavior import BehaviorError, normalize_deep_thinking
+        setting = self.room_settings.get(room) or {}
+        try:
+            return normalize_deep_thinking(setting.get("deep_thinking"))
+        except BehaviorError:
+            return True
+
     def proactive_bias(self, room):
         """本群主动插话门槛学到的修正，正数表示群友不太欢迎插话。重启后保留。"""
         with self._lock:

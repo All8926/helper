@@ -316,6 +316,7 @@ function readBehaviorForm() {
     glance_minutes: contextNumber($('#behavior-glance').value, 2),
     voice_mode: $('#behavior-voice').value,
     voice_id: $('#behavior-voice-id').value.trim(),
+    deep_thinking: $('#behavior-thinking').checked,
     plugin_options: readNoticeOptions()};
 }
 function readNoticeOptions() {
@@ -381,6 +382,7 @@ function showBehavior(room) {
   const voiceMode = saved.voice_mode || (!voice.voice_id || voice.enabled === false ? 'off' : (voice.mode === 'auto' ? 'auto' : 'always'));
   $('#behavior-voice').value = ['off', 'always', 'auto'].includes(voiceMode) ? voiceMode : 'off';
   $('#behavior-voice-id').value = saved.voice_id != null ? saved.voice_id : (voice.voice_id || '');
+  $('#behavior-thinking').checked = saved.deep_thinking !== false;
   const voiceHint = $('#behavior-voice-hint');
   const named = voice.name && voice.voice_id && voice.name !== voice.voice_id;
   if (voiceHint) voiceHint.textContent = named
@@ -522,7 +524,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-voice', 'behavior-voice-id', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-voice', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-member-search').oninput = () => {
   if ($('#behavior-member-search').value.trim()) membersExpanded = true;

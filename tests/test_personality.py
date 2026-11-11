@@ -99,7 +99,7 @@ class PersonalityTests(unittest.TestCase):
 
     def test_cancel_during_model_request_discards_old_personality_reply(self):
         state = self.store.set_personality(ROOM, "嘴臭")
-        def cancel(system, user):
+        def cancel(system, user, **_kwargs):
             prepare_switch(self.message("/切换人格 取消"), self.store)
             return {"reply": "旧人格回答"}
         self.ctx._llm = Mock(complete_json=cancel)
@@ -203,7 +203,7 @@ class PersonalityTests(unittest.TestCase):
     def test_personality_change_during_model_request_discards_summary(self):
         self.store.record(self.message("当天记录"))
         self.store.set_personality(ROOM, "嘴臭")
-        def change(system, user):
+        def change(system, user, **_kwargs):
             self.store.set_personality(ROOM, "卑微")
             return {"summary": "旧人格结果"}
         self.ctx._llm = Mock(complete_json=change)
@@ -335,7 +335,7 @@ class PersonalityTests(unittest.TestCase):
     def test_clear_and_personality_change_during_chat_request_cancel_reply(self):
         for mutation in (lambda: self.store.clear(ROOM), lambda: self.store.set_personality(ROOM, "卑微")):
             self.store.set_personality(ROOM, "嘴臭")
-            def change(system, user):
+            def change(system, user, **_kwargs):
                 mutation()
                 return {"reply": "失效的结果"}
             plugin = self.setup_chat(change)

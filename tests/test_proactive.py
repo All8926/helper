@@ -49,8 +49,10 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(normalize_room_setting({}, [])["activity"], 0)
         self.assertEqual(normalize_room_setting({"proactive_enabled": True}, [])["activity"], 5)
         self.assertEqual(normalize_room_setting({}, [])["glance_minutes"], 2)
+        self.assertTrue(normalize_room_setting({}, [])["deep_thinking"])
+        self.assertFalse(normalize_room_setting({"deep_thinking": False}, [])["deep_thinking"])
         self.assertEqual(normalize_room_setting({"glance_minutes": 0}, [])["glance_minutes"], 0)
-        for bad in ({"activity": 11}, {"glance_minutes": 61}):
+        for bad in ({"activity": 11}, {"glance_minutes": 61}, {"deep_thinking": "yes"}):
             with self.assertRaises(BehaviorError):
                 normalize_room_setting(bad, [])
 
@@ -121,7 +123,7 @@ class PluginTests(unittest.TestCase):
         self.follow = {"to_bot": True, "reply": "明天也行"}
         self.judged, self.followed = [], []
 
-        def provider(system, user):
+        def provider(system, user, **_kwargs):
             if "to_bot" in system:
                 self.followed.append(user)
                 return self.follow
@@ -318,7 +320,7 @@ class PluginTests(unittest.TestCase):
         self.start()
         seen = []
 
-        def provider(system, user, image=None):
+        def provider(system, user, image=None, **_kwargs):
             seen.append(image)
             if "to_bot" in system:
                 return {"to_bot": True, "reply": "接着说。"}
@@ -342,7 +344,7 @@ class PluginTests(unittest.TestCase):
         self.start(activity=0)
         seen = []
 
-        def provider(system, user, image=None):
+        def provider(system, user, image=None, **_kwargs):
             seen.append((image, "附带一张图片" in system, '"image": true' in user))
             return {"reply": "看到了。"}
 
@@ -377,7 +379,7 @@ class PluginTests(unittest.TestCase):
         path = self._png("red.png", "red")
         calls = []
 
-        def reject(system, user, image=None):
+        def reject(system, user, image=None, **_kwargs):
             calls.append(image)
             if image:
                 raise LLMError("大模型接口 HTTP 400；请核对密钥、余额和模型配置", status=400)
