@@ -157,7 +157,7 @@
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `json_mode` | `true` | 发送 `response_format: {"type":"json_object"}`；接口不支持时改为 `false` |
+| `json_mode` | `true` | 发送 `response_format: {"type":"json_object"}`。官方 DeepSeek 深度思考开着时不发送，改由提示词要求 JSON；接口不支持时把此项改为 `false` |
 | `token_limit_parameter` | `max_tokens` | 可改为 `max_completion_tokens`，请求只发送选中的一种令牌参数 |
 | `max_tokens` | `512` | 上述令牌参数的数值，支持 128–4096 |
 | `extra_body` | `{}` | 可选扩展请求参数；其他兼容服务默认不发送 DeepSeek 的 `thinking` 等专属字段 |
@@ -166,7 +166,7 @@
 
 每个群可以在群设置里开关深度思考，没关过的群默认开启。DeepSeek 官方接口和豆包使用 `thinking`，千问使用 `enable_thinking`，Grok 只能在高、低思考强度之间切换。旧的 `deepseek-reasoner` 不自动改这个字段。`extra_body` 里已经写了对应字段时，以扩展参数为准。其他未识别的模型不会自动添加这些字段。
 
-若接口正常结束却返回空正文，最多重试一次。官方 DeepSeek 的 JSON 模式可能[偶发空正文](https://api-docs.deepseek.com/guides/json_mode/)，重试时改用提示词 JSON 输出，结果仍须通过严格 JSON 校验；不会把思考过程当成回复。HTTP 错误、超时、内容过滤、拒绝、工具调用或令牌截断不会自动重试。若持续出现空正文，可在网页高级选项中关闭 JSON 模式。
+官方 DeepSeek 在深度思考开着时不发送 JSON 模式。该模式会在认不出 JSON 时把正文换成空格，思考内容却可能留着最终答案，见[JSON Output](https://api-docs.deepseek.com/guides/json_mode/)和[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)。提示词仍要求返回 JSON。思考内容里已有 JSON 对象时直接采用。只有思考过程、或正文不是 JSON 时，关掉深度思考并恢复 JSON 模式，再请求一次。没有思考内容的空正文仍按同一次请求重试一次。思考过程不会当成回复。HTTP 错误、超时、内容过滤、拒绝、工具调用或令牌截断不会自动重试。
 
 扩展对象最多 16 KiB，不能覆盖 `model`、`messages`、`stream`、`response_format`、令牌上限或认证字段，密钥只填 `api_key`。
 

@@ -43,7 +43,8 @@ class LLMTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["model"], "deepseek-flash")
         self.assertEqual(payload["messages"][1]["content"], "中文")
-        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertNotIn("response_format", payload)
+        self.assertIn("JSON 对象", payload["messages"][0]["content"])
         self.assertEqual(payload["thinking"], {"type": "enabled"})
         self.assertEqual(call.call_args.kwargs["timeout"], 20)
 
@@ -52,11 +53,13 @@ class LLMTests(unittest.TestCase):
         with patch("wxbot_framework.llm.urlopen", return_value=self.response("{}")) as call:
             client.complete_json("JSON", "测试")
         self.assertEqual(json.loads(call.call_args.args[0].data)["thinking"], {"type": "enabled"})
+        self.assertNotIn("response_format", json.loads(call.call_args.args[0].data))
 
     def test_group_can_turn_deep_thinking_off(self):
         with patch("wxbot_framework.llm.urlopen", return_value=self.response("{}")) as call:
             self.client.complete_json("JSON", "测试", thinking=False)
         self.assertEqual(json.loads(call.call_args.args[0].data)["thinking"], {"type": "disabled"})
+        self.assertEqual(json.loads(call.call_args.args[0].data)["response_format"], {"type": "json_object"})
 
     def test_doubao_qwen_and_grok_follow_the_same_switch(self):
         cases = (
@@ -136,6 +139,7 @@ class LLMTests(unittest.TestCase):
             client.complete_json("JSON", "测试")
         body = json.loads(call.call_args.args[0].data)
         self.assertEqual(body["thinking"], {"type": "disabled"})
+        self.assertEqual(body["response_format"], {"type": "json_object"})
         self.assertEqual(body["temperature"], 0.5)
 
     def test_explicit_reasoning_options_override_official_defaults(self):
@@ -147,6 +151,10 @@ class LLMTests(unittest.TestCase):
                 body = json.loads(call.call_args.args[0].data)
                 for key, value in extra.items():
                     self.assertEqual(body[key], value)
+                if extra.get("thinking", {}).get("type") == "disabled":
+                    self.assertEqual(body["response_format"], {"type": "json_object"})
+                else:
+                    self.assertNotIn("response_format", body)
                 if "thinking" not in extra:
                     self.assertNotIn("thinking", body)
 
@@ -164,8 +172,9 @@ class LLMTests(unittest.TestCase):
         self.assertEqual(call.call_count, 2)
         first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
         self.assertEqual(first, second)
-        self.assertEqual(first["response_format"], {"type": "json_object"})
+        self.assertNotIn("response_format", first)
         self.assertEqual(first["thinking"], {"type": "enabled"})
+        self.assertIn("JSON 对象", first["messages"][0]["content"])
         self.assertTrue(self.client.json_mode)
 
     def test_gateway_empty_response_retry_keeps_configured_protocol(self):
@@ -182,7 +191,80 @@ class LLMTests(unittest.TestCase):
             with self.assertRaisesRegex(LLMError,"未取得最终答案") as caught:
                 self.client.complete_json("JSON", "测试")
         self.assertEqual(call.call_count, 2)
+        first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
+        self.assertEqual(first["thinking"], {"type": "enabled"})
+        self.assertNotIn("response_format", first)
+        self.assertEqual(second["thinking"], {"type": "disabled"})
+        self.assertEqual(second["response_format"], {"type": "json_object"})
         self.assertNotIn("private-reasoning-text", str(caught.exception))
+
+    def test_json_left_in_reasoning_is_used_without_another_request(self):
+        client = LLMClient({**self.options, "model": "deepseek-v4-flash"})
+        raw = {"choices":[{"finish_reason":"stop","message":{
+            "content": "",
+            "reasoning_content": "先组织答案。\n{\"reply\":\"可以\"}"}}]}
+        with patch("wxbot_framework.llm.urlopen", return_value=io.BytesIO(json.dumps(raw).encode())) as call:
+            self.assertEqual(client.complete_json("JSON", "测试"), {"reply": "可以"})
+        self.assertEqual(call.call_count, 1)
+        self.assertNotIn("response_format", json.loads(call.call_args.args[0].data))
+
+    def test_thinking_request_reads_json_wrapped_in_text(self):
+        client = LLMClient({**self.options, "model": "deepseek-v4-flash"})
+        raw = {"choices":[{"finish_reason":"stop","message":{"content":"结果如下\n{\"reply\":\"可以\"}"}}]}
+        with patch("wxbot_framework.llm.urlopen", return_value=io.BytesIO(json.dumps(raw).encode())) as call:
+            self.assertEqual(client.complete_json("只返回 JSON", "测试"), {"reply": "可以"})
+        body = json.loads(call.call_args.args[0].data)
+        self.assertEqual(call.call_count, 1)
+        self.assertNotIn("response_format", body)
+        self.assertEqual(body["thinking"], {"type": "enabled"})
+        self.assertIn("JSON 对象", body["messages"][0]["content"])
+
+    def test_non_json_text_retries_with_thinking_off_and_json_mode(self):
+        client = LLMClient({**self.options, "model": "deepseek-v4-flash"})
+        first_raw = {"choices":[{"finish_reason":"stop","message":{"content":"先不给结构"}}]}
+        second_raw = {"choices":[{"finish_reason":"stop","message":{"content":"{\"reply\":\"成功\"}"}}]}
+        bodies = [io.BytesIO(json.dumps(first_raw).encode()), io.BytesIO(json.dumps(second_raw).encode())]
+        with patch("wxbot_framework.llm.urlopen", side_effect=bodies) as call:
+            self.assertEqual(client.complete_json("JSON", "测试"), {"reply": "成功"})
+        first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
+        self.assertNotIn("response_format", first)
+        self.assertEqual(first["thinking"], {"type": "enabled"})
+        self.assertEqual(second["thinking"], {"type": "disabled"})
+        self.assertEqual(second["response_format"], {"type": "json_object"})
+
+    def test_reasoning_without_json_retries_once_with_thinking_disabled(self):
+        client = LLMClient({**self.options, "model": "deepseek-v4-flash"})
+        first_raw = {"choices":[{"finish_reason":"stop","message":{"content":None,"reasoning_content":"private-chain"}}]}
+        second_raw = {"choices":[{"finish_reason":"stop","message":{"content":"{\"reply\":\"成功\"}"}}]}
+        bodies = [io.BytesIO(json.dumps(first_raw).encode()), io.BytesIO(json.dumps(second_raw).encode())]
+        with patch("wxbot_framework.llm.urlopen", side_effect=bodies) as call:
+            self.assertEqual(client.complete_json("JSON", "测试"), {"reply": "成功"})
+        first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
+        self.assertEqual(first["thinking"], {"type": "enabled"})
+        self.assertNotIn("response_format", first)
+        self.assertEqual(second["thinking"], {"type": "disabled"})
+        self.assertEqual(second["response_format"], {"type": "json_object"})
+
+    def test_doubao_qwen_and_grok_drop_thinking_when_only_reasoning_comes_back(self):
+        cases = (
+            ("doubao-seed-2-0-lite", "thinking", {"type": "enabled"}, {"type": "disabled"}),
+            ("qwen3.8-max", "enable_thinking", True, False),
+            ("grok-4.7", "reasoning_effort", "high", "low"),
+        )
+        raw = {"choices":[{"finish_reason":"stop","message":{"content":"","reasoning":"private-chain"}}]}
+        answer = {"choices":[{"finish_reason":"stop","message":{"content":"{\"reply\":\"成功\"}"}}]}
+        for model, field, before, after in cases:
+            with self.subTest(model=model):
+                client = LLMClient({**self.options, "base_url": "https://gateway.example.test/v1", "model": model})
+                bodies = [io.BytesIO(json.dumps(raw).encode()), io.BytesIO(json.dumps(answer).encode())]
+                with patch("wxbot_framework.llm.urlopen", side_effect=bodies) as call:
+                    self.assertEqual(client.complete_json("JSON", "测试"), {"reply": "成功"})
+                first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
+                self.assertEqual(first[field], before)
+                self.assertEqual(second[field], after)
+                self.assertEqual(first["response_format"], {"type": "json_object"})
+                self.assertEqual(second["response_format"], {"type": "json_object"})
+                self.assertNotIn("private-chain", json.dumps(second, ensure_ascii=False))
 
     def test_refusal_filter_tool_call_and_truncation_do_not_retry(self):
         cases = [("content_filter",{}), ("stop",{"refusal":"private-provider-detail"}),
@@ -316,7 +398,10 @@ class VisionRequestTests(unittest.TestCase):
             self.assertEqual(self.client.complete_json("只返回 JSON", "看这张图", image=image), {"reply": "红色"})
         self.assertGreaterEqual(call.call_args.kwargs["timeout"], 45)
         payload = json.loads(call.call_args.args[0].data)
-        self.assertEqual(payload["messages"][0]["content"], "只返回 JSON")
+        self.assertTrue(payload["messages"][0]["content"].startswith("只返回 JSON"))
+        self.assertIn("JSON 对象", payload["messages"][0]["content"])
+        self.assertNotIn("response_format", payload)
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
         parts = payload["messages"][1]["content"]
         self.assertEqual(parts[0], {"type": "text", "text": "看这张图"})
         self.assertEqual(parts[1]["type"], "image_url")

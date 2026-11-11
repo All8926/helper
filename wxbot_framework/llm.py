@@ -22,6 +22,83 @@ def is_worldguide_url(url):
         return False
 
 
+def _object_in(text):
+    """从一段文字里取出唯一需要的 JSON 对象。没有就返回 None，不把原文交给调用方。"""
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    if text.startswith("```") and text.endswith("```"):
+        opening, separator, body = text.partition("\n")
+        if separator and opening.strip().lower() in ("```", "```json"):
+            text = body[:-3].strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        return data
+    last = None
+    start = text.find("{")
+    while start >= 0:
+        depth, in_string, escaped, end = 0, False, False, None
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        if end is None:
+            start = text.find("{", start + 1)
+            continue
+        try:
+            found = json.loads(text[start:end + 1])
+        except ValueError:
+            found = None
+        if isinstance(found, dict):
+            last = found
+        start = text.find("{", end + 1)
+    return last
+
+
+def _reasoning_text(message):
+    for key in ("reasoning_content", "reasoning"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _turn_off_thinking(payload):
+    """这一次思考没有写出最终 JSON 时，下一回改为直接回答。"""
+    changed = False
+    thinking = payload.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+        payload["thinking"] = {"type": "disabled"}
+        changed = True
+    if payload.get("enable_thinking") is True:
+        payload["enable_thinking"] = False
+        changed = True
+    if payload.get("reasoning_effort") in ("high", "medium", "xhigh", "max"):
+        payload["reasoning_effort"] = "low"
+        changed = True
+    return changed
+
+
 class LLMError(RuntimeError):
     def __init__(self, message, *, status=None):
         super().__init__(message)
@@ -29,6 +106,9 @@ class LLMError(RuntimeError):
 
 
 class LLMClient:
+    _DEEPSEEK_THINKING_MODELS = frozenset((
+        "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat"))
+
     def __init__(self, options):
         if not isinstance(options, dict):
             raise ValueError("大模型配置必须是 JSON 对象")
@@ -113,9 +193,31 @@ class LLMClient:
             if "thinking" not in extra:
                 payload["thinking"] = {"type": "enabled" if enabled else "disabled"}
             return
-        if (self._deepseek_official and name in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat")
+        if (self._deepseek_official and name in self._DEEPSEEK_THINKING_MODELS
                 and not {"thinking", "reasoning_effort"}.intersection(extra)):
             payload["thinking"] = {"type": "enabled" if enabled else "disabled"}
+
+    def _thinking_blocks_json_mode(self, payload):
+        """官方 DeepSeek 思考开着时不发 JSON 模式。该模式会把认不出的正文换成空格。"""
+        if not self.json_mode or not self._deepseek_official:
+            return False
+        if self.model.lower() not in self._DEEPSEEK_THINKING_MODELS:
+            return False
+        thinking = payload.get("thinking")
+        return not (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+
+    def _direct_answer(self, payload):
+        """思考没有交出 JSON 时，关掉思考并恢复 JSON 模式。"""
+        changed = _turn_off_thinking(payload)
+        if (self._deepseek_official and self.model.lower() in self._DEEPSEEK_THINKING_MODELS
+                and "thinking" not in self.extra_body):
+            thinking = payload.get("thinking")
+            if not (isinstance(thinking, dict) and thinking.get("type") == "disabled"):
+                payload["thinking"] = {"type": "disabled"}
+                changed = True
+        if changed and self.json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return changed
 
     def complete_json(self, system, user, image=None, *, thinking=True):
         json_instruction = "\n\n请只返回一个有效的 JSON 对象，不要使用 Markdown 代码围栏或附加说明。"
@@ -135,10 +237,12 @@ class LLMClient:
         payload = {"model": self.model, "messages": [{"role": "system", "content": system},
                                                        {"role": "user", "content": content}],
                    self.token_limit_parameter: self.max_tokens, "stream": False, **self.extra_body}
-        if self.json_mode:
-            payload["response_format"] = {"type": "json_object"}
         self._apply_thinking(payload, thinking)
-        allow_fenced = not self.json_mode
+        # 思考开着时不发 JSON 模式，避免接口把最终答案抹成空正文。提示词里仍要求 JSON。
+        if self._thinking_blocks_json_mode(payload):
+            payload["messages"][0]["content"] += json_instruction
+        elif self.json_mode:
+            payload["response_format"] = {"type": "json_object"}
         # 看图要上传图片，短超时很容易失败；不超过配置允许的 60 秒。
         wait = min(60, max(self.timeout, 45)) if image is not None else self.timeout
         headers = {"Content-Type": "application/json"}
@@ -168,28 +272,46 @@ class LLMClient:
                     raise LLMError("大模型接口未提供可用正文，请检查服务商的内容限制")
                 if finish in ("tool_calls", "function_call") or message.get("tool_calls") or message.get("function_call"):
                     raise LLMError("大模型返回了工具调用，当前功能需要直接返回 JSON 正文")
-                content = message["content"]
-                if content is None or (isinstance(content, str) and not content.strip()):
-                    # 官方 JSON 模式偶发空正文。再按同一次 JSON 请求试一次，不改成自由文本。
+                content = message.get("content")
+                blank = content is None or (isinstance(content, str) and not content.strip())
+                if blank:
+                    reasoning = _reasoning_text(message)
+                    found = _object_in(reasoning)
+                    if found is not None:
+                        return found
+                    # 只有思考过程、没有最终 JSON 时，关掉深度思考再要一次正文。
+                    # 没有思考内容时仍按同一次请求重试，避免把偶发空正文误判成思考问题。
                     if attempt == 0 and finish in (None, "stop"):
-                        logging.getLogger("LLM").warning("大模型返回空正文，按原请求重试一次")
+                        if reasoning and self._direct_answer(payload):
+                            logging.getLogger("LLM").warning("深度思考没有给出最终答案，改为直接回答并重试一次")
+                        else:
+                            logging.getLogger("LLM").warning("大模型返回空正文，按原请求重试一次")
                         continue
-                    suffix = "（只收到思考内容，未取得最终答案）" if message.get("reasoning_content") else ""
+                    suffix = "（只收到思考内容，未取得最终答案）" if reasoning else ""
                     raise LLMError("大模型返回了空结果" + suffix)
                 if not isinstance(content, str):
                     raise LLMError("大模型正文格式不正确")
                 content = content.strip()
-                if allow_fenced and content.startswith("```") and content.endswith("```"):
+                relaxed = self._thinking_blocks_json_mode(payload)
+                # JSON 模式关闭，或官方思考请求未发 JSON 模式时，接受围栏里的 JSON。
+                if "response_format" not in payload and content.startswith("```") and content.endswith("```"):
                     opening, separator, body = content.partition("\n")
                     if separator and opening.strip().lower() in ("```", "```json"):
                         content = body[:-3].strip()
+                invalid = False
                 try:
                     data = json.loads(content)
                 except ValueError:
-                    raise LLMError("大模型没有返回 JSON 对象，请重试") from None
-                if not isinstance(data, dict):
-                    raise LLMError("大模型结果应为 JSON 对象")
-                return data
+                    invalid = True
+                    data = _object_in(content) if relaxed else None
+                if isinstance(data, dict):
+                    return data
+                if relaxed and attempt == 0 and finish in (None, "stop") and self._direct_answer(payload):
+                    logging.getLogger("LLM").warning("深度思考没有返回 JSON，改为直接回答并重试一次")
+                    continue
+                if invalid:
+                    raise LLMError("大模型没有返回 JSON 对象，请重试")
+                raise LLMError("大模型结果应为 JSON 对象")
         except HTTPError as error:
             # 不输出响应正文或请求头，避免服务器错误回显密钥。
             if self._worldguide and error.code == 429:
