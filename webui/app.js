@@ -311,6 +311,8 @@ function readBehaviorForm() {
     personality: $('#behavior-personality').value || '默认', disabled_plugins: disabled,
     context_hours: contextNumber($('#behavior-hours').value, 6),
     context_limit: contextNumber($('#behavior-limit').value, 300),
+    proactive_enabled: $('#behavior-proactive').checked,
+    proactive_cooldown: contextNumber($('#behavior-proactive-cooldown').value, 180),
     plugin_options: readNoticeOptions()};
 }
 function readNoticeOptions() {
@@ -370,6 +372,8 @@ function showBehavior(room) {
   $('#behavior-personality').value = selected;
   $('#behavior-hours').value = saved.context_hours || 6;
   $('#behavior-limit').value = saved.context_limit || 300;
+  $('#behavior-proactive').checked = saved.proactive_enabled === true;
+  $('#behavior-proactive-cooldown').value = saved.proactive_cooldown || 180;
   const notice = (saved.plugin_options || {}).group_notice || {};
   $('#behavior-welcome').value = notice.welcome_template || '';
   $('#behavior-leave').value = notice.leave_template || '';
@@ -506,7 +510,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-proactive', 'behavior-proactive-cooldown', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-member-search').oninput = () => {
   if ($('#behavior-member-search').value.trim()) membersExpanded = true;

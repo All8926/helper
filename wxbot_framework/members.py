@@ -815,6 +815,49 @@ class MemberStore:
             raise MemberError(f"多个群都有 {name}，请指定群 ID")
         return rows[0]
 
+    def recent_room_lines(self, room, seconds, limit):
+        """最近几分钟的群文本，从旧到新。跳过指令和探测消息。"""
+        from .summary import CONTROL
+        from .text import own_group_command
+
+        if not self.history_enabled or room not in self.groups:
+            return []
+        cutoff = (self._now() - timedelta(seconds=max(1, int(seconds)))).astimezone(timezone.utc).isoformat()
+        with self._lock:
+            rows = self._connection().execute(
+                """SELECT id, sender_id, text, received_at, bot_generated, session_id, sequence
+                   FROM messages WHERE account=? AND room=? AND received_at>=?
+                   ORDER BY id DESC LIMIT ?""",
+                (self.account, room, cutoff, max(1, int(limit)) * 3),
+            ).fetchall()
+            chosen = []
+            for row in reversed(rows):
+                text = " ".join((row["text"] or "").split())
+                if not text or "WXBOT_AT_CHAT_PROBE" in text or own_group_command(text):
+                    continue
+                if text.split(maxsplit=1)[0] in CONTROL:
+                    continue
+                chosen.append({
+                    "id": row["id"],
+                    "sender_id": row["sender_id"],
+                    "text": text[:200],
+                    "bot": bool(row["bot_generated"]),
+                    "session_id": row["session_id"] or "",
+                    "sequence": row["sequence"],
+                    "speaker": self._context_speaker(room, row["sender_id"], row["bot_generated"]),
+                    "age_seconds": self._line_age(row["received_at"]),
+                })
+        return chosen[-max(1, int(limit)):]
+
+    def _line_age(self, received_at):
+        try:
+            moment = datetime.fromisoformat(received_at)
+        except (TypeError, ValueError):
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return max(0, (self._now() - moment).total_seconds())
+
     def resolve(self, name, room=None):
         with self._lock:
             return self._member(self._row(name, room))
