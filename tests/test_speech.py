@@ -163,6 +163,7 @@ class SpeechTests(unittest.TestCase):
         plugin.on_load(self.ctx)
         try:
             plugin.on_message(msg, self.ctx)
+            self.assertIn('根据刚才的对话', self.ctx._llm.complete_json.call_args.args[0])
             self.assertIn('"voice":false', self.ctx._llm.complete_json.call_args.args[0])
             self.assertEqual(self.client.synthesize.call_count, 2)
         finally:

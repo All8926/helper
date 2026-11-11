@@ -15,16 +15,18 @@ diary 是近几天的群日记，memory 是当前说话人的档案，都只作�
 如果当前消息为空，说明对方只是艾特了你，请简短回应。输出仅为 JSON 对象：{"reply":"给群友的回复"}。"""
 SHORT_SYSTEM = SYSTEM.replace("通常用 50–150 个汉字，内容自然具体", "正文总长不超过 20 个字（包括标点），用完整短句直接回应")
 _OUTPUT = '输出仅为 JSON 对象：{"reply":"给群友的回复"}。'
-_VOICE_OUTPUT = ('这句适合直接念出来（口语、短、没有链接、代码或一长串数字）时 voice 为 true，适合打字看时为 false。'
-                 '输出仅为 JSON 对象：{"reply":"给群友的回复","voice":false}。')
+# 自动语音时附在输出格式前。只描述判断依据，不列举具体话题。
+VOICE_CHOICE = ("根据刚才的对话判断这句该念出来还是打成文字。"
+                "对方是在让你把回复说出来听，或这句适合直接听时，voice 为 true。"
+                "对方需要可查看的文字，或只是普通文字交流、拿不准时，voice 为 false。")
+_VOICE_OUTPUT = VOICE_CHOICE + '输出仅为 JSON 对象：{"reply":"给群友的回复","voice":false}。'
 _IMAGE = "\n这次输入附带一张图片，就是当前消息要你看的那张。请结合图片回答，不要说自己看不见。"
 FOLLOW_UP = """这条消息没有艾特你，也没有叫你的名字。先判断它是不是在接着跟你说话：回应你刚才的话、追问你、或者用「你」直接对你说。
 在跟别人说话、只是群里闲聊、或者拿不准时，to_bot 为 false，reply 为空字符串。是在跟你说时 to_bot 为 true，reply 按上面的要求回应。
 输出仅为 JSON 对象：{"to_bot":true,"reply":"给群友的回复"}。"""
 _FOLLOW_UP_VOICE = FOLLOW_UP.replace(
     '输出仅为 JSON 对象：{"to_bot":true,"reply":"给群友的回复"}。',
-    '这句适合直接念出来（口语、短、没有链接、代码或一长串数字）时 voice 为 true，适合打字看时为 false。'
-    '输出仅为 JSON 对象：{"to_bot":true,"reply":"给群友的回复","voice":false}。')
+    VOICE_CHOICE + '输出仅为 JSON 对象：{"to_bot":true,"reply":"给群友的回复","voice":false}。')
 
 
 def transcript_line(row, *, current):

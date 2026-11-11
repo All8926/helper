@@ -32,7 +32,7 @@ def speech_chunks(text, limit):
 
 
 def prefer_voice(text, requested, mode, limit):
-    """始终语音直接念。自动时先挡掉不该念的，其余只在模型明确要求时用语音。"""
+    """始终语音直接念。自动时模型按对话给出 voice，链接、代码、长串数字和超长回复仍用文字。"""
     if mode != "auto":
         return True
     collapsed = " ".join(str(text or "").split())

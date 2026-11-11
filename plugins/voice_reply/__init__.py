@@ -78,16 +78,16 @@ class Plugin:
                 if public.window_limited:
                     sections.append('公开列表受接口浏览范围限制，可按关键词搜索更多音色。')
                 sections.append('/查看音色 关键词：搜索\n/查看音色 全部：查看各国语言音色\n/音色 名称：切换\n'
-                                '/音色 自动：按内容决定语音或文字\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复')
+                                '/音色 自动：按对话决定语音或文字\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复')
                 text = '\n\n'.join(sections)
             elif len(parts) == 1:
-                text = '用法：/音色 名称或ID\n/查看音色：查看列表\n/查看音色 关键词：搜索\n/音色 自动：按内容决定\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复'
+                text = '用法：/音色 名称或ID\n/查看音色：查看列表\n/查看音色 关键词：搜索\n/音色 自动：按对话决定\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复'
             else:
                 state = ctx.speech.select(message.chat_id, parts[1].strip())
                 if not state.enabled:
                     text = '本群已恢复文字回复。'
                 elif state.mode == 'auto':
-                    text = f'本群音色为：{state.name}。之后按内容决定用语音还是文字。'
+                    text = f'本群音色为：{state.name}。之后按对话决定用语音还是文字。'
                 else:
                     text = f'本群音色已切换为：{state.name}。之后都用语音回复。'
             for part in split_text(text):

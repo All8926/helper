@@ -367,10 +367,10 @@ def speak_rule(reason):
 def judge_system(reason, level, choose_voice=False):
     system = SYSTEM.format(rule=speak_rule(reason), tone=tone(level))
     if choose_voice:
+        from .dialogue import VOICE_CHOICE
         system = system.replace(
             '输出仅为 JSON 对象：{"reply":""}。',
-            '这句适合直接念出来（口语、短、没有链接、代码或一长串数字）时 voice 为 true，适合打字看时为 false。'
-            '输出仅为 JSON 对象：{"reply":"","voice":false}。')
+            VOICE_CHOICE + '输出仅为 JSON 对象：{"reply":"","voice":false}。')
     return system
 
 
