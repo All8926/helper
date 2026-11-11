@@ -183,7 +183,7 @@ class DailySummaryTests(unittest.TestCase):
         self.store.record(self.message("可清空的记录"))
         self.clear_plugin.on_message(self.message("/清空"), self.ctx)
         self.assertEqual(self.snapshot().messages, ())
-        self.assertEqual(self.backend.sent[-1][1], "已清空本群聊天记录。")
+        self.assertEqual(self.backend.sent[-1][1], "已清空本群聊天记录和记住的内容。")
         self.assertEqual(self.store.resolve("测试成员", ROOM).wxid, CAT)
 
     def test_all_long_records_are_covered_and_partials_are_merged(self):
@@ -207,7 +207,7 @@ class DailySummaryTests(unittest.TestCase):
         self.ctx._llm = Mock(complete_json=clear_during_request)
         self.plugin.on_load(self.ctx)
         self.plugin.on_message(self.message("/总结 测试成员"), self.ctx)
-        self.assertEqual(self.backend.sent, [(ROOM, "已清空本群聊天记录。")])
+        self.assertEqual(self.backend.sent, [(ROOM, "已清空本群聊天记录和记住的内容。")])
 
     def test_json_escaping_does_not_overflow_small_batches(self):
         text = "\x01" * 2000
@@ -350,7 +350,7 @@ class DailySummaryTests(unittest.TestCase):
         self.ctx._llm = Mock(complete_json=clear_during_request)
         self.plugin.on_load(self.ctx)
         self.plugin.on_message(self.message("/总结群聊"), self.ctx)
-        self.assertEqual(self.backend.sent, [(ROOM, "已清空本群聊天记录。")])
+        self.assertEqual(self.backend.sent, [(ROOM, "已清空本群聊天记录和记住的内容。")])
 
     def test_group_midnight_during_request_cancels_result(self):
         self.store.record(self.message("旧日全群聊天"))

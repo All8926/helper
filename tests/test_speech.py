@@ -137,8 +137,10 @@ class SpeechTests(unittest.TestCase):
         plugin.on_message(msg, self.ctx)
         self.client.synthesize.assert_called_once_with('继续保持。', FIRST.id)
         self.assertEqual(self.backend.sent[-1], (ROOM, 'voice'))
-        prompt = json.loads(self.ctx._llm.complete_json.call_args.args[1])
-        self.assertIn('今天写代码', json.dumps(prompt, ensure_ascii=False))
+        payloads = [call.args[1] for call in self.ctx._llm.complete_json.call_args_list
+                    if len(call.args) > 1 and isinstance(call.args[1], str) and '"transcript"' in call.args[1]]
+        self.assertTrue(payloads)
+        self.assertIn('今天写代码', payloads[-1])
 
     def test_chunks_do_not_lose_text(self):
         text = '第一句话。第二句话！第三句话很长很长很长很长。'

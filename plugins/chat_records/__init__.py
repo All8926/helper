@@ -13,4 +13,4 @@ class Plugin:
             ctx.reply(message, "用法：/清空")
             return
         self.members.clear(message.chat_id)
-        ctx.reply(message, "已清空本群聊天记录。")
+        ctx.reply(message, "已清空本群聊天记录和记住的内容。")

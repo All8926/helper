@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .account import validate_account
 from .config import validate_name
+from .memory import DIARY_DAYS, SOURCE_CHARS, SOURCE_LINE_CHARS, SOURCE_LINES
 from .room_behavior import (BehaviorError, RESERVED_PERSONALITY, alias_mentioned as name_mentioned,
                             normalize_personalities, normalize_room_setting, public_personalities,
                             normalize_global_prompt, write_json)
@@ -225,6 +226,16 @@ class MemberStore:
                     account TEXT NOT NULL, room TEXT NOT NULL, voice_id TEXT NOT NULL,
                     name TEXT NOT NULL, enabled INTEGER NOT NULL, generation INTEGER NOT NULL,
                     PRIMARY KEY(account,room));
+                CREATE TABLE IF NOT EXISTS room_digests (
+                    account TEXT NOT NULL, room TEXT NOT NULL, local_day TEXT NOT NULL,
+                    summary TEXT NOT NULL, PRIMARY KEY(account,room,local_day));
+                CREATE TABLE IF NOT EXISTS pending_digests (
+                    account TEXT NOT NULL, room TEXT NOT NULL, local_day TEXT NOT NULL,
+                    source TEXT NOT NULL, PRIMARY KEY(account,room,local_day));
+                CREATE TABLE IF NOT EXISTS person_facts (
+                    account TEXT NOT NULL, room TEXT NOT NULL, sender_id TEXT NOT NULL,
+                    facts TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(account,room,sender_id));
                 INSERT OR IGNORE INTO room_members SELECT DISTINCT account,room,sender_id FROM messages;
             """)
             if "self_named" not in {row["name"] for row in db.execute("PRAGMA table_info(people)")}:
@@ -278,6 +289,8 @@ class MemberStore:
                         generation=chat_buffers.generation+1 WHERE chat_buffers.local_day<>excluded.local_day""",
                                (self.account, room, day))
                     if self.daily_clear:
+                        # 先留下可压缩的材料，再删原文。日记写好之前，回复不会读这段原文。
+                        self._stash_digest_source(db, room, start)
                         db.execute("DELETE FROM messages WHERE account=? AND room=? AND received_at<?",
                                    (self.account, room, start))
             self._active_day = day
@@ -290,9 +303,105 @@ class MemberStore:
             self.rollover()
             with self._connection() as db:
                 count = db.execute("DELETE FROM messages WHERE account=? AND room=?", (self.account, room)).rowcount
+                db.execute("DELETE FROM room_digests WHERE account=? AND room=?", (self.account, room))
+                db.execute("DELETE FROM pending_digests WHERE account=? AND room=?", (self.account, room))
+                db.execute("DELETE FROM person_facts WHERE account=? AND room=?", (self.account, room))
                 db.execute("UPDATE chat_buffers SET generation=generation+1 WHERE account=? AND room=?",
                            (self.account, room))
             return count
+
+    def _stash_digest_source(self, db, room, start):
+        """把即将删掉的文字收成待压缩日记。同一天已有材料或日记时不重复收。"""
+        rows = db.execute("""SELECT sender_id, text, bot_generated, received_at FROM messages
+            WHERE account=? AND room=? AND received_at<? ORDER BY id DESC LIMIT ?""",
+            (self.account, room, start, SOURCE_LINES)).fetchall()
+        if not rows:
+            return
+        local_day = datetime.fromisoformat(rows[0]["received_at"]).astimezone(BEIJING).date().isoformat()
+        exists = db.execute("""SELECT 1 FROM room_digests WHERE account=? AND room=? AND local_day=?
+            UNION SELECT 1 FROM pending_digests WHERE account=? AND room=? AND local_day=?""",
+            (self.account, room, local_day, self.account, room, local_day)).fetchone()
+        if exists:
+            return
+        source = self._compact_source(room, rows)
+        if source:
+            db.execute("INSERT INTO pending_digests(account,room,local_day,source) VALUES(?,?,?,?)",
+                       (self.account, room, local_day, source))
+
+    def _compact_source(self, room, rows):
+        """从新到旧截到字数上限，再按时间排回去。"""
+        from .summary import CONTROL
+        lines, size = [], 0
+        for row in rows:
+            text = " ".join(str(row["text"]).split())
+            if not text or "WXBOT_AT_CHAT_PROBE" in text or text.split(maxsplit=1)[0] in CONTROL:
+                continue
+            speaker = self._context_speaker(room, row["sender_id"], row["bot_generated"])
+            moment = datetime.fromisoformat(row["received_at"]).astimezone(BEIJING).strftime("%H:%M")
+            line = f"{moment} {speaker}：{text[:SOURCE_LINE_CHARS]}"
+            if lines and size + len(line) + 1 > SOURCE_CHARS:
+                break
+            lines.append(line)
+            size += len(line) + 1
+        lines.reverse()
+        return "\n".join(lines)
+
+    def pending_digests(self):
+        """还没写成日记的材料。某一天压缩失败时，其他天仍可以继续。"""
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("成员目录已关闭")
+            rows = self._connection().execute("""SELECT room, local_day, source FROM pending_digests
+                WHERE account=? ORDER BY local_day""", (self.account,)).fetchall()
+            return tuple((row["room"], row["local_day"], row["source"]) for row in rows)
+
+    def finish_digest(self, room, local_day, summary):
+        """材料还在才写入日记。清空已经删掉材料时，不再把日记写回去。"""
+        with self._lock, self._connection() as db:
+            removed = db.execute("DELETE FROM pending_digests WHERE account=? AND room=? AND local_day=?",
+                                 (self.account, room, local_day)).rowcount
+            if not removed:
+                return False
+            db.execute("""INSERT INTO room_digests(account,room,local_day,summary) VALUES(?,?,?,?)
+                ON CONFLICT(account,room,local_day) DO UPDATE SET summary=excluded.summary""",
+                       (self.account, room, local_day, summary))
+            return True
+
+    def recent_digests(self, room, limit=DIARY_DAYS):
+        with self._lock:
+            rows = self._connection().execute("""SELECT local_day, summary FROM room_digests
+                WHERE account=? AND room=? ORDER BY local_day DESC LIMIT ?""",
+                (self.account, room, limit)).fetchall()
+        return tuple({"date": row["local_day"], "summary": row["summary"]} for row in reversed(rows))
+
+    def facts_for(self, room, sender_id):
+        with self._lock:
+            row = self._connection().execute("""SELECT facts FROM person_facts
+                WHERE account=? AND room=? AND sender_id=?""",
+                (self.account, room, sender_id)).fetchone()
+            if row is None:
+                return ()
+            try:
+                data = json.loads(row[0])
+            except json.JSONDecodeError:
+                return ()
+            if not isinstance(data, list):
+                return ()
+            return tuple(item for item in data if isinstance(item, str) and item.strip())
+
+    def replace_facts(self, room, sender_id, facts, generation):
+        """清空或跨天之后，不再写回这次对话开始前看到的档案。"""
+        payload = json.dumps(list(facts), ensure_ascii=False)
+        with self._lock, self._connection() as db:
+            state = db.execute("SELECT generation FROM chat_buffers WHERE account=? AND room=?",
+                               (self.account, room)).fetchone()
+            if state is None or state[0] != generation:
+                return False
+            db.execute("""INSERT INTO person_facts(account,room,sender_id,facts,updated_at) VALUES(?,?,?,?,?)
+                ON CONFLICT(account,room,sender_id) DO UPDATE SET facts=excluded.facts,
+                updated_at=excluded.updated_at""",
+                (self.account, room, sender_id, payload, self._now().astimezone(timezone.utc).isoformat()))
+            return True
 
     def today_snapshot(self, name, room):
         """完整读取当天的成员文本，数量不受控制台 history 的条数限制。"""
@@ -566,7 +675,7 @@ class MemberStore:
             yield
 
     def context_window(self, room):
-        """这个群带给模型的时间范围和条数。没单独配置时是 6 小时、300 条。"""
+        """这个群从库里读取的时间范围和条数。没单独配置时是 6 小时、300 条。送给模型时还会再收成最近一小段。"""
         from .room_behavior import DEFAULT_CONTEXT_HOURS, DEFAULT_CONTEXT_LIMIT
         setting = self.room_settings.get(room) or {}
         return (setting.get("context_hours", DEFAULT_CONTEXT_HOURS),

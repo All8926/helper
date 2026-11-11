@@ -421,7 +421,7 @@ function showGroupsTab(name) {
 }
 function paintPersonalities() {
   $('#personality-list').innerHTML = personalityItems.length ? personalityItems.map((item, index) =>
-    `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><label>提示词<textarea data-personality-prompt rows="4" spellcheck="false">${escape(item.prompt)}</textarea></label></div>`).join('')
+    `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><label>提示词<textarea data-personality-prompt rows="10" spellcheck="false">${escape(item.prompt)}</textarea></label></div>`).join('')
     : '<p class="section-description">还没有人格。未保存过时会使用内置的嘴臭、卑微和夸夸。</p>';
 }
 function syncMemberToggle() {

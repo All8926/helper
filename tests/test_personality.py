@@ -21,6 +21,14 @@ from wxbot_framework.text import TextRouter
 ROOM, CAT, ROBOT, OTHER_ROOM, OTHER = daily.ROOM, daily.CAT, daily.ROBOT, daily.OTHER_ROOM, daily.OTHER
 
 
+def dialogue_args(mock):
+    """档案会在回复后再调一次模型，核对时要找到带流水的那一次。"""
+    for item in reversed(mock.call_args_list):
+        if len(item.args) > 1 and isinstance(item.args[1], str) and '"transcript"' in item.args[1]:
+            return item.args
+    raise AssertionError("没有把群聊流水交给模型")
+
+
 class PersonalityTests(unittest.TestCase):
     setUp = daily.DailySummaryTests.setUp
     tearDown = daily.DailySummaryTests.tearDown
@@ -244,7 +252,7 @@ class PersonalityTests(unittest.TestCase):
         plugin = self.setup_chat(provider)
         msg = self.chat("我今天又摸鱼了")
         plugin.on_message(msg, self.ctx)
-        system, user = provider.call_args.args
+        system, user = dialogue_args(provider)
         self.assertTrue(system.startswith("当前人格：嘴臭"))
         payload = json.loads(user)
         self.assertEqual([item["text"] for item in payload["transcript"] if not item["current"]],
@@ -267,9 +275,9 @@ class PersonalityTests(unittest.TestCase):
         self.assertLessEqual(len(body), 20)
         self.assertTrue(body.startswith("三行代码"))
         self.assertFalse(any(char in body for char in "`#*-|"))
-        sent_context = json.loads(provider.call_args.args[1])["transcript"]
+        sent_context = json.loads(dialogue_args(provider)[1])["transcript"]
         self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
-        self.assertIn("长度与排版优先", provider.call_args.args[0])
+        self.assertIn("长度与排版优先", dialogue_args(provider)[0])
         provider.return_value = {"reply": "#**```"}
         plugin.on_message(self.chat(sequence=101), self.ctx)
         self.assertIn("暂时无法回复", self.backend.sent[-1][1])
