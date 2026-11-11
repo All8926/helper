@@ -151,13 +151,9 @@ class LLMClient:
                     raise LLMError("大模型返回了工具调用，当前功能需要直接返回 JSON 正文")
                 content = message["content"]
                 if content is None or (isinstance(content, str) and not content.strip()):
+                    # 官方 JSON 模式偶发空正文。再按同一次 JSON 请求试一次，不改成自由文本。
                     if attempt == 0 and finish in (None, "stop"):
-                        if self._deepseek_official and self.json_mode:
-                            # 官方 JSON 模式存在偶发空正文：仅此情形退回提示词 JSON，仍严格解析。
-                            payload.pop("response_format", None)
-                            payload["messages"][0]["content"] += json_instruction
-                            allow_fenced = True
-                        logging.getLogger("LLM").warning("大模型返回空正文，重试一次")
+                        logging.getLogger("LLM").warning("大模型返回空正文，按原请求重试一次")
                         continue
                     suffix = "（只收到思考内容，未取得最终答案）" if message.get("reasoning_content") else ""
                     raise LLMError("大模型返回了空结果" + suffix)
@@ -168,7 +164,10 @@ class LLMClient:
                     opening, separator, body = content.partition("\n")
                     if separator and opening.strip().lower() in ("```", "```json"):
                         content = body[:-3].strip()
-                data = json.loads(content)
+                try:
+                    data = json.loads(content)
+                except ValueError:
+                    raise LLMError("大模型没有返回 JSON 对象，请重试") from None
                 if not isinstance(data, dict):
                     raise LLMError("大模型结果应为 JSON 对象")
                 return data

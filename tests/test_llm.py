@@ -137,16 +137,14 @@ class LLMTests(unittest.TestCase):
                     client.complete_json("JSON", "测试")
                 self.assertNotIn("thinking", json.loads(call.call_args.args[0].data))
 
-    def test_official_empty_json_response_retries_once_in_prompt_mode(self):
-        with patch("wxbot_framework.llm.urlopen", side_effect=[self.response(''),self.response('```json\n{"reply":"成功"}\n```')]) as call:
-            self.assertEqual(self.client.complete_json("原功能规则 JSON", "原输入"), {"reply":"成功"})
+    def test_official_empty_json_response_retries_the_same_json_request(self):
+        with patch("wxbot_framework.llm.urlopen", side_effect=[self.response(''), self.response('{"reply":"成功"}')]) as call:
+            self.assertEqual(self.client.complete_json("原功能规则 JSON", "原输入"), {"reply": "成功"})
         self.assertEqual(call.call_count, 2)
         first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
-        self.assertIn("response_format", first)
-        self.assertNotIn("response_format", second)
-        self.assertIn("原功能规则", second["messages"][0]["content"])
-        self.assertEqual(first["messages"][1], second["messages"][1])
-        self.assertEqual(first["thinking"], second["thinking"])
+        self.assertEqual(first, second)
+        self.assertEqual(first["response_format"], {"type": "json_object"})
+        self.assertEqual(first["thinking"], {"type": "disabled"})
         self.assertTrue(self.client.json_mode)
 
     def test_gateway_empty_response_retry_keeps_configured_protocol(self):
