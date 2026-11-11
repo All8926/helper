@@ -650,8 +650,9 @@ class PluginContext:
         from .personality import PersonalityLLM
         state = personality if personality is not None else self.personality(message)
         prompts = self._members.prompts() if self._members is not None else None
+        guard = self._members.global_prompt if self._members is not None else None
         return PersonalityLLM(self.llm, state, current=lambda: self._members is None or
-                              self._members.personality_is_current(state), prompts=prompts)
+                              self._members.personality_is_current(state), prompts=prompts, guard=guard)
 
     def personality_guard(self, state):
         return self._members.personality_delivery_guard(state) if self._members is not None else nullcontext()

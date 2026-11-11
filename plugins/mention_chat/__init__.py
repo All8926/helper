@@ -1,4 +1,6 @@
 """真正艾特机器人，或叫到本群配置的别名后，用本群人格回复。"""
+import time
+
 from wxbot_framework.dialogue import Dialogue
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import SnapshotExpired
@@ -18,16 +20,20 @@ class Plugin:
         if not self._addressed(message):
             return
         personality = ctx.personality(message)
+        started = time.perf_counter()
         try:
             snapshot = self.members.conversation_snapshot(message)
+            prepared = time.perf_counter()
             guard = lambda: ctx.response_guard(snapshot, personality)
-            self.reply_to_member(message, ctx, snapshot, personality, guard)
-            ctx.logger.info("艾特对话完成：room=%s persona=%s context=%d", message.chat_id,
-                            personality.name, len(snapshot.messages))
+            model_seconds, send_seconds = self.reply_to_member(message, ctx, snapshot, personality, guard)
+            ctx.logger.info("回复耗时 | 群=%s | 人格=%s | 上下文=%d条 %.2f秒 | 调用模型 %.2f秒 | 发送含等待 %.2f秒 | 合计 %.2f秒",
+                            message.chat_id, personality.name, len(snapshot.messages),
+                            prepared - started, model_seconds, send_seconds,
+                            time.perf_counter() - started)
         except SnapshotExpired:
             ctx.logger.info("艾特对话已取消：记录或人格状态已变更")
         except LLMError as error:
-            ctx.logger.warning("艾特对话失败：%s", error)
+            ctx.logger.warning("艾特对话失败：%.2f秒 | %s", time.perf_counter() - started, error)
             try:
                 ctx.reply(message, "暂时无法回复，请稍后再艾特我。", delivery_guard=guard)
             except SnapshotExpired:
@@ -44,13 +50,18 @@ class Plugin:
         return mentioned or self.members.alias_mentioned(message.chat_id, message.text)
 
     def reply_to_member(self, message, ctx, snapshot, personality, delivery_guard):
-        """上下文已准备好，在这里生成并发送给群友的回复。"""
+        """上下文已准备好，在这里生成并发送给群友的回复。返回模型和发送各自的秒数。"""
+        started = time.perf_counter()
         reply = personality_text(Dialogue(ctx.llm_for(message, personality=personality)).reply(snapshot),
                                  personality.name)
+        model_seconds = time.perf_counter() - started
         display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
+        started = time.perf_counter()
         deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard)
+        send_seconds = time.perf_counter() - started
         # 发出去之后才记。写库失败不影响已经发出的回复。
         try:
             self.members.record_bot_reply(message, reply)
         except Exception:
             ctx.logger.warning("机器人回复已发出，但没有写入群流水")
+        return model_seconds, send_seconds

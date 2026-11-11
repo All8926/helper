@@ -14,7 +14,8 @@ from pathlib import Path
 from .account import validate_account
 from .config import validate_name
 from .room_behavior import (BehaviorError, RESERVED_PERSONALITY, alias_mentioned as name_mentioned,
-                            normalize_personalities, normalize_room_setting, public_personalities, write_json)
+                            normalize_personalities, normalize_room_setting, public_personalities,
+                            normalize_global_prompt, write_json)
 from .text import validate_mentions
 
 logger = logging.getLogger("Members")
@@ -150,6 +151,10 @@ class MemberStore:
         except BehaviorError as error:
             raise MemberError(str(error)) from error
         self.personalities = public_personalities(items)
+        try:
+            self.global_prompt = normalize_global_prompt(options["global_prompt"] if "global_prompt" in options else None)
+        except BehaviorError as error:
+            raise MemberError(str(error)) from error
         raw_rooms = options.get("room_settings") or {}
         if not isinstance(raw_rooms, dict):
             raise MemberError("room_settings 应为对象")
@@ -412,10 +417,15 @@ class MemberStore:
 
     def update_behavior(self, data):
         """保存人格库或单个群的管理员、别名和启用人格，并立刻作用于当前进程。"""
-        if not isinstance(data, dict) or ("personalities" not in data and "room" not in data):
+        if not isinstance(data, dict) or ("personalities" not in data and "room" not in data and "global_prompt" not in data):
             raise MemberError("没有要保存的群聊行为")
+        if "global_prompt" in data:
+            self.global_prompt = normalize_global_prompt(data["global_prompt"])
         if "personalities" in data:
             self.apply_personalities(data["personalities"])
+        elif "global_prompt" in data:
+            with self._lock:
+                self._persist_behavior()
         if "room" in data:
             self.apply_room(data["room"], data.get("setting"))
 
@@ -500,6 +510,7 @@ class MemberStore:
     def _persist_behavior(self):
         def mutate(raw):
             raw["personalities"] = self.personalities
+            raw["global_prompt"] = self.global_prompt
             raw["room_settings"] = self.room_settings
         self._mutate_config(mutate)
 
