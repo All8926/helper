@@ -294,7 +294,7 @@ class PluginManager:
                 self.load_errors[target] = str(error)
                 logger.exception("插件 %s 加载失败，其他插件继续运行", target)
 
-    def dispatch(self, message, *, only=None):
+    def dispatch(self, message, *, only=None, required=None):
         disabled = frozenset()
         chat_id = getattr(message, "chat_id", "")
         group = bool(getattr(message, "is_group", False) or str(chat_id).endswith("@chatroom"))
@@ -308,7 +308,8 @@ class PluginManager:
         for record in records:
             if record.spec.name in disabled:
                 continue
-            if (only is None or record.spec.name == only) and message.type in record.spec.message_types:
+            if ((only is None or record.spec.name == only) and message.type in record.spec.message_types and
+                    (required is None or (record.spec.api == "v1" and required in record.spec.requires))):
                 record.enqueue(message)
 
     def run_scheduled(self, action_id, params, session, allowlist, valid=lambda: True):

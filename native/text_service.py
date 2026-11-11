@@ -447,12 +447,20 @@ class NativeTextService(NativeFileHelperService):
                                            "is_group": bool(data["room_wxid"])}
             if message.type == 34:
                 data['monitor_only'] = True
-                data['raw_content'] = data.get('content') or body
+                from wxbot_framework.voice_receiver import parse_voice_xml
+                try:
+                    xml, _ = parse_voice_xml(data.get('content') or body)
+                except (ValueError, TypeError, UnicodeError):
+                    xml = ''
+                data.update(raw_content=xml, voice_xml=xml)
                 enabled = not self.image_allowlist or data['chat_id'] in self.image_allowlist
                 receiving = enabled and self._voice_receiver is not None
                 status = 'pending' if receiving else 'unavailable' if enabled else 'skipped'
-                sanitized = dict(data, voice_status=status, voice_path='')
-                for field in ('raw_content', 'content', 'msg'):
+                sanitized = dict(data, voice_status=status, voice_path='',
+                                 voice_xml_only=bool(xml) and status == 'unavailable')
+                if not enabled:
+                    sanitized.update(raw_content='', voice_xml='')
+                for field in ('content', 'msg'):
                     sanitized[field] = ''
                 if receiving:
                     # Validation failure can synchronously deliver failed; always
@@ -699,6 +707,16 @@ class NativeTextService(NativeFileHelperService):
 
     def send_text(self, to_wxid, content):
         return self._send_text(to_wxid, content)
+
+    def set_local_recall(self, enabled):
+        from local_recall_transport import set_local_recall
+        if type(enabled) is not bool:
+            raise ValueError("本机防撤回开关必须是布尔值")
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生文本服务没有运行")
+            self._check_account(force=True)
+            return set_local_recall(self.pid, self.self_wxid, enabled, bridge_path=self._dll)
 
     def send_quote_text(self, to_wxid, original_id, content):
         validate_target(to_wxid)
