@@ -60,7 +60,8 @@ class Plugin:
     def reply_summary(self, message, ctx, snapshot, rows, personality, group, delivery_guard):
         """当天记录已准备好，在这里生成总结、组织文案并回复。"""
         summarizer = ChatSummarizer(ctx.llm_for(message, personality=personality),
-                                   chunk_chars=self.summarizer.chunk_chars)
+                                   chunk_chars=self.summarizer.chunk_chars,
+                                   reply_limit=self.members.reply_limit)
         summary = summarizer.summarize(snapshot, rows,
             current=lambda: self.members.snapshot_is_current(snapshot))
         if group:

@@ -272,8 +272,7 @@ class PersonalityTests(unittest.TestCase):
         sent = self.backend.sent[-1]
         body = sent[1]
         self.assertEqual(sent[2], 100)
-        self.assertLessEqual(len(body), 20)
-        self.assertTrue(body.startswith("三行代码"))
+        self.assertEqual(body, "三行代码就敢吹，先把手上的任务搞定再说。")
         self.assertFalse(any(char in body for char in "`#*-|"))
         sent_context = json.loads(dialogue_args(provider)[1])["transcript"]
         self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
@@ -289,8 +288,7 @@ class PersonalityTests(unittest.TestCase):
         for command in ("/总结 测试成员", "/总结群聊"):
             self.plugin.on_message(self.message(command), self.ctx)
             body = self.backend.sent[-1][1]
-            self.assertLessEqual(len(body), 20)
-            self.assertTrue(body.startswith("代码写三行"))
+            self.assertEqual(body, "代码写三行，吹牛倒是写满了一整本。剩下的明天再说。")
             self.assertNotIn("今日", body)
             self.assertNotIn("*", body)
         prepare_switch(self.message("/切换人格 取消"), self.store)
@@ -303,7 +301,6 @@ class PersonalityTests(unittest.TestCase):
         self.assertIn("发愤图强", success)
         self.assertIn("一心一意", failure)
         for text in (success, failure):
-            self.assertLessEqual(len(text), 20)
             self.assertFalse(any(char in text for char in "`#*-|"))
 
     def test_mention_of_other_person_and_bot_output_do_not_call_model(self):
@@ -373,6 +370,11 @@ class PersonalityTests(unittest.TestCase):
         plugin.on_message(self.chat(), self.ctx)
         self.assertIn("暂时无法回复", self.backend.sent[-1][1])
         self.assertEqual(len(self.store.conversation_snapshot(self.chat(sequence=101)).messages), 2)
+
+    def test_reply_over_configured_limit_is_rejected(self):
+        plugin = self.setup_chat(Mock(return_value={"reply": "字" * 601}))
+        plugin.on_message(self.chat(), self.ctx)
+        self.assertIn("暂时无法回复", self.backend.sent[-1][1])
 
     def test_idiom_game_skips_at_dialogue_and_style_keeps_correct_next_word(self):
         plugin = IdiomPlugin()

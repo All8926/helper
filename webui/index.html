@@ -172,9 +172,10 @@
     <div id="groups-panel-persona" class="hidden" role="tabpanel" aria-labelledby="groups-tab-persona">
         <form id="personality-form" class="settings-section">
           <div class="section-heading"><h2>人格库</h2><button id="personality-add" class="secondary small" type="button">添加人格</button></div>
-          <p class="section-description">每个群在「群设置」里选用一份。名为「嘴臭」时，回复仍会压到 20 字以内。全局提示词会固定接在每个人格后面，没选人格时也会带上。</p>
+          <p class="section-description">每个群在「群设置」里选用一份。全局提示词会固定接在每个人格后面，没选人格时也会带上。回复长短由提示词决定；超过字数上限的回复和总结会失败并提示重试。</p>
           <label for="global-prompt">全局提示词</label>
           <textarea id="global-prompt" rows="3" maxlength="2000" spellcheck="false" placeholder="留空则不附加"></textarea>
+          <label for="reply-limit">回复字数上限<input id="reply-limit" type="number" min="1" max="8000" step="1" value="600"></label>
           <div id="personality-list"></div>
           <div class="form-footer"><span class="live-hint">保存后，正在使用这些人格的群会按新提示词回复。</span><button id="save-personalities" class="primary" type="submit">保存人格</button></div>
         </form>

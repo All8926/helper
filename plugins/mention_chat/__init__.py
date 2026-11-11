@@ -155,14 +155,15 @@ class Plugin:
         voice = self._auto_voice(message.chat_id)
         try:
             reply, speak = Dialogue(client).reply(
-                snapshot, diary=diary, memory=memory, choose_voice=voice, image=image)
+                snapshot, diary=diary, memory=memory, choose_voice=voice, image=image,
+                limit=self.members.reply_limit)
         except LLMError as error:
             # 文本模型拒绝图片时，仍按原来的文字回复。
             if not image or getattr(error, "status", None) != 400:
                 raise
             ctx.logger.info("看图 | 群=%s | 模型未接受图片，改为只看文字", message.chat_id)
             reply, speak = Dialogue(client).reply(
-                snapshot, diary=diary, memory=memory, choose_voice=voice)
+                snapshot, diary=diary, memory=memory, choose_voice=voice, limit=self.members.reply_limit)
         reply = personality_text(reply, personality.name)
         model_seconds = time.perf_counter() - started
         return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
@@ -200,7 +201,7 @@ class Plugin:
         reply, speak = Dialogue(ctx.llm_for(message, personality=personality)).reply(
             snapshot, diary=self.members.recent_digests(message.chat_id),
             memory=self.members.facts_for(message.chat_id, message.sender_id), follow_up=True,
-            choose_voice=self._auto_voice(message.chat_id))
+            choose_voice=self._auto_voice(message.chat_id), limit=self.members.reply_limit)
         model_seconds = time.perf_counter() - started
         if not reply:
             return None
@@ -313,6 +314,9 @@ class Plugin:
                                 recent_bot))
             cleaned = pro.clean_reply(result.get("reply") if isinstance(result, dict) else "")
             reply = personality_text(cleaned, personality.name) if cleaned else ""
+            if reply and len(reply) > self.members.reply_limit:
+                ctx.logger.info("主动插话 | 群=%s | 超过回复字数上限，不说", room)
+                return
         except (LLMError, PersonalityExpired) as error:
             ctx.logger.warning("主动插话失败：%.2f秒 | %s", time.perf_counter() - started, error)
             return

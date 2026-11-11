@@ -16,7 +16,7 @@ from .config import validate_name
 from .memory import DIARY_DAYS, SOURCE_CHARS, SOURCE_LINE_CHARS, SOURCE_LINES
 from .room_behavior import (BehaviorError, RESERVED_PERSONALITY, alias_mentioned as name_mentioned,
                             normalize_personalities, normalize_room_setting, public_personalities,
-                            normalize_global_prompt, write_json)
+                            normalize_global_prompt, normalize_reply_limit, write_json)
 from .text import validate_mentions
 
 logger = logging.getLogger("Members")
@@ -155,6 +155,7 @@ class MemberStore:
         self.personalities = public_personalities(items)
         try:
             self.global_prompt = normalize_global_prompt(options["global_prompt"] if "global_prompt" in options else None)
+            self.reply_limit = normalize_reply_limit(options.get("reply_limit"))
         except BehaviorError as error:
             raise MemberError(str(error)) from error
         raw_rooms = options.get("room_settings") or {}
@@ -532,13 +533,16 @@ class MemberStore:
 
     def update_behavior(self, data):
         """保存人格库或单个群的管理员、别名和启用人格，并立刻作用于当前进程。"""
-        if not isinstance(data, dict) or ("personalities" not in data and "room" not in data and "global_prompt" not in data):
+        if not isinstance(data, dict) or ("personalities" not in data and "room" not in data
+                                          and "global_prompt" not in data and "reply_limit" not in data):
             raise MemberError("没有要保存的群聊行为")
+        if "reply_limit" in data:
+            self.reply_limit = normalize_reply_limit(data["reply_limit"])
         if "global_prompt" in data:
             self.global_prompt = normalize_global_prompt(data["global_prompt"])
         if "personalities" in data:
             self.apply_personalities(data["personalities"])
-        elif "global_prompt" in data:
+        elif "global_prompt" in data or "reply_limit" in data:
             with self._lock:
                 self._persist_behavior()
         if "room" in data:
@@ -626,6 +630,7 @@ class MemberStore:
         def mutate(raw):
             raw["personalities"] = self.personalities
             raw["global_prompt"] = self.global_prompt
+            raw["reply_limit"] = self.reply_limit
             raw["room_settings"] = self.room_settings
         self._mutate_config(mutate)
 

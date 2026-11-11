@@ -8,7 +8,7 @@ from .members import SnapshotExpired
 from .llm import LLMError
 
 PROMPTS = {
-    "嘴臭": """你的语气是"超雄"：肾上腺素拉满，自信到近乎狂妄，说话像拍桌子定调，会使用谐音字和梗来骂人。不铺垫、不客套、不用敬语，开口就下结论；可以怼、可以嘲讽，但必须言之有物。信息密度要高：每句话都要带信息或判断，禁止复述对方、禁止废话。每次回复控制在 20 个汉字以内，宁可短到锋利，不要长到温吞。输出必须是微信里直接能读的纯文本：禁止任何 Markdown 或排版符号（**、#、##、-、*、``` 、表格），需要分点就用「一、二、三」或直接换行。回复里不允许出现机器人自己的名字或任何署名、自称，直接给内容，不要说"我（某某）"这类话；提到机器人自己的行为时就说"机器人"或"我"。""",
+    "嘴臭": """你的语气是"超雄"：肾上腺素拉满，自信到近乎狂妄，说话像拍桌子定调，会使用谐音字和梗来骂人。不铺垫、不客套、不用敬语，开口就下结论；可以怼、可以嘲讽，但必须言之有物。信息密度要高：每句话都要带信息或判断，禁止复述对方、禁止废话。输出必须是微信里直接能读的纯文本：禁止任何 Markdown 或排版符号（**、#、##、-、*、``` 、表格），需要分点就用「一、二、三」或直接换行。回复里不允许出现机器人自己的名字或任何署名、自称，直接给内容，不要说"我（某某）"这类话；提到机器人自己的行为时就说"机器人"或"我"。""",
     "卑微": """你是一位极其卑微、胆怯、低姿态的机器人，把每位群友都当成爷供着。
 多用“爷”“您”“小的”“是我这笨脑袋不争气”等自然称呼，处处让着对方，受到嘲讽也不还嘴。
 对方骂你时先认怂、自嘲、赔不是，不能反击群友；其他群友也都值得尊重，不能踩一捧一。
@@ -61,8 +61,19 @@ def personality_text(text, name):
     text = re.sub(r"[`#*\-|]", "", text).strip()
     if not text:
         raise LLMError("大模型正文只含排版符号，请重试")
-    # 总可见字符数也限制为 20，确保中文、标点或英文混排都不会撑长。
-    return text[:20].rstrip()
+    return text
+
+
+def _accepts_thinking(func):
+    """Mock 会吞掉关键字，所以看它真正调用的函数接不接 thinking。"""
+    target = getattr(func, "side_effect", None)
+    if not callable(target):
+        target = func
+    try:
+        parameters = inspect.signature(target).parameters
+    except (TypeError, ValueError):
+        return False
+    return any(item.kind == inspect.Parameter.VAR_KEYWORD or item.name == "thinking" for item in parameters.values())
 
 
 def _complete(client, system, user, *, image=None, thinking=True):
@@ -70,13 +81,12 @@ def _complete(client, system, user, *, image=None, thinking=True):
     kwargs = {}
     if image is not None:
         kwargs["image"] = image
-    try:
-        parameters = inspect.signature(client.complete_json).parameters
-    except (TypeError, ValueError):
-        parameters = {}
-    if any(item.kind == inspect.Parameter.VAR_KEYWORD or item.name == "thinking" for item in parameters.values()):
+    if _accepts_thinking(client.complete_json):
         kwargs["thinking"] = thinking
     return client.complete_json(system, user, **kwargs)
+
+
+class PersonalityLLM:
     def __init__(self, client, state, *, current, prompts=None, guard=None, thinking=True):
         self.client, self.state, self.current = client, state, current
         # 请求开始时记下提示词，避免保存新文案时改写已经发出的请求。

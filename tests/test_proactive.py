@@ -10,7 +10,7 @@ import test_chat_summary as daily
 from plugins.mention_chat import Plugin
 from wxbot_framework import proactive as pro
 from wxbot_framework.llm import LLMError
-from wxbot_framework.room_behavior import BehaviorError, normalize_room_setting
+from wxbot_framework.room_behavior import BehaviorError, normalize_reply_limit, normalize_room_setting
 from wxbot_framework.sdk import Message
 from wxbot_framework.vision import vision_data_url
 
@@ -52,6 +52,11 @@ class FilterTests(unittest.TestCase):
         self.assertTrue(normalize_room_setting({}, [])["deep_thinking"])
         self.assertFalse(normalize_room_setting({"deep_thinking": False}, [])["deep_thinking"])
         self.assertEqual(normalize_room_setting({"glance_minutes": 0}, [])["glance_minutes"], 0)
+        self.assertEqual(normalize_reply_limit(None), 600)
+        self.assertEqual(normalize_reply_limit(8000), 8000)
+        for bad in (0, 8001, True, 1.5, "600"):
+            with self.assertRaises(BehaviorError):
+                normalize_reply_limit(bad)
         for bad in ({"activity": 11}, {"glance_minutes": 61}, {"deep_thinking": "yes"}):
             with self.assertRaises(BehaviorError):
                 normalize_room_setting(bad, [])
@@ -90,7 +95,7 @@ class FilterTests(unittest.TestCase):
         self.assertTrue(pro.addresses_bot("你推荐哪家", recent, 2, ROBOT))
         self.assertFalse(pro.addresses_bot("我推荐哪家", recent, 2, ROBOT))
         self.assertEqual(pro.clean_reply("不说。"), "")
-        self.assertEqual(len(pro.clean_reply("啊" * 100)), 80)
+        self.assertEqual(len(pro.clean_reply("啊" * 100)), 100)
 
     def test_glance_needs_fresh_lines_while_chat_is_live(self):
         lines = [{"sender_id": CAT, "text": "去爬山", "id": 1, "age_seconds": 40},

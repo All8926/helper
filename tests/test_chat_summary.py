@@ -264,6 +264,16 @@ class DailySummaryTests(unittest.TestCase):
             with self.subTest(result_type=type(result)), self.assertRaises(LLMError):
                 ChatSummarizer(client).summarize(snapshot, conversation_rows(snapshot), current=lambda: True)
 
+    def test_custom_reply_limit_rejects_only_longer_summaries(self):
+        self.store.record(self.message("聊天"))
+        snapshot = self.snapshot()
+        rows = conversation_rows(snapshot)
+        short = Mock(complete_json=Mock(return_value={"summary": "字" * 10}))
+        self.assertEqual(ChatSummarizer(short, reply_limit=10).summarize(snapshot, rows, current=lambda: True), "字" * 10)
+        long = Mock(complete_json=Mock(return_value={"summary": "字" * 11}))
+        with self.assertRaises(LLMError):
+            ChatSummarizer(long, reply_limit=10).summarize(snapshot, rows, current=lambda: True)
+
     def test_utf8_chunks_keep_all_characters_and_fit_native_limit(self):
         text = "中文🌸abc\n" * 300
         parts = split_text(text)
