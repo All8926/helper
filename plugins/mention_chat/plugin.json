@@ -1,11 +1,12 @@
 {
   "api": "v1",
-  "description": "真实艾特机器人，或叫本群配置的别名后，按群人格回复并引用原消息。管理员可在群里发送 /开启对话、/关闭对话",
+  "description": "真实艾特机器人、叫本群配置的别名，或引用机器人的话后，按群人格回复并引用原消息。本群活跃度大于 0 时会认出接着跟机器人说的话，也会主动插话。管理员可在群里发送 /开启对话、/关闭对话",
   "requires": [
     "group.text.receive",
     "group.text.send",
     "group.text.mention"
   ],
+  "message_types": [1, 49],
   "business": [
     {
       "function": "Plugin.reply_to_member",

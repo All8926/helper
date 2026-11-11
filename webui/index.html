@@ -132,11 +132,8 @@
               <label for="behavior-limit">上下文最多条数<input id="behavior-limit" type="number" min="1" max="2000" step="1" value="300"></label>
             </div>
             <p class="group-name-hint">这是读取上限。艾特或叫别名时，只把这段里最新的 24 条、合计不超过 2400 字送给模型。默认读取 6 小时、300 条。</p>
-            <div class="field-pair">
-              <label class="inline"><input id="behavior-proactive" type="checkbox">允许主动插话</label>
-              <label for="behavior-proactive-cooldown">插话冷却（秒）<input id="behavior-proactive-cooldown" type="number" min="30" max="3600" step="1" value="180"></label>
-            </div>
-            <p class="group-name-hint">默认关闭。打开后，没人艾特或叫别名时，只有像在提问、接话或冷场时才可能插一句。冷却时间内不会再插。</p>
+            <label for="behavior-activity">活跃度（0–10）<input id="behavior-activity" type="number" min="0" max="10" step="1" value="0"></label>
+            <p class="group-name-hint">0 表示只在被艾特、叫别名或引用它的话时回复。1–10 越大越爱开口：1–2 只接悬着没人答的问题和自己的话题，3 起会回应提问、劝架，4 起会在冷场时接一句，6 起会加入大家正在聊的事。大于 0 时，机器人刚回过的人不点名接着说，它也能认出来。插话没人理，间隔会自动放宽；有人嫌它吵，1 小时内不主动开口。</p>
             <label for="behavior-admins">管理员微信 ID</label>
             <textarea id="behavior-admins" rows="3" placeholder="每行一个 wxid" spellcheck="false" autocomplete="off"></textarea>
             <div class="member-pick-head">

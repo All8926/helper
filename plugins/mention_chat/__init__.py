@@ -1,18 +1,17 @@
-"""真正艾特机器人，或叫到本群配置的别名后，用本群人格回复。没被点名时，本群打开了才考虑主动插一句。"""
+"""真正艾特机器人、叫到本群别名，或引用机器人的话时，用本群人格回复。
+本群活跃度大于 0 时，没被点名也会认出接着跟机器人说的话，并在合适的时候主动插一句。"""
 import threading
 import time
+from datetime import datetime
 
-from wxbot_framework.dialogue import Dialogue, working_messages
+from wxbot_framework import proactive as pro
+from wxbot_framework.dialogue import Dialogue, transcript_line, working_messages
 from wxbot_framework.llm import LLMError
-from wxbot_framework.members import SnapshotExpired
-from wxbot_framework.memory import MemoryWorker
+from wxbot_framework.members import BEIJING, SnapshotExpired
+from wxbot_framework.memory import MemoryWorker, public_diary, public_memory
 from wxbot_framework.mentions import strip_at_labels
 from wxbot_framework.personality import PersonalityExpired, personality_text
-from wxbot_framework.proactive import (
-    COLD_CONTEXT_SECONDS, COLD_MAX_SECONDS, COLD_MIN_SECONDS, CONTEXT_LIMIT, CONTEXT_SECONDS,
-    DEFAULT_COOLDOWN, ProactiveGate, bot_spoke_recently, candidate_reason, clean_reply,
-    judge_gap, judge_system, transcript,
-)
+from wxbot_framework.quoted import reference
 from wxbot_framework.room_behavior import is_slash_command
 from wxbot_framework.sdk import Message
 from wxbot_framework.speech import deliver_model_reply
@@ -31,7 +30,9 @@ class Plugin:
         ctx.llm  # 启动时核对配置，不请求接口。
         self.ctx = ctx
         self.memory = MemoryWorker(ctx)
-        self.gate = ProactiveGate()
+        self.gate = pro.ProactiveGate()
+        self.followups = pro.FollowUps()
+        self._cold_seen = {}
         self._cold_stop = threading.Event()
         self._cold = threading.Thread(target=self._cold_loop, args=(ctx,), name="ProactiveCold", daemon=True)
         self._cold.start()
@@ -45,38 +46,82 @@ class Plugin:
             stop.set()
 
     def on_message(self, message, ctx):
-        if not self._addressed(message):
-            self._consider(message, ctx)
+        if not self._group_text(message):
             return
+        room, bot = message.chat_id, self.members.account
+        if self._addressed(message):
+            if pro.annoyed(message.text, (), None, bot, named=True):
+                self._mute(ctx, room)
+            self._answer(message, ctx)
+            return
+        if message.type != 1 or message.sender_id == bot or not self._can_interject(message):
+            return
+        level = self.members.room_activity(room)
+        if level == 0:
+            return
+        recent = self.members.recent_room_lines(room, pro.CANDIDATE_SECONDS, 20)
+        current_id = self._current_id(recent, message)
+        if pro.annoyed(message.text, recent, current_id, bot):
+            self._mute(ctx, room)
+            return
+        if self.gate.muted(room):
+            return
+        if self._follows_up(message, recent, current_id):
+            self._answer(message, ctx, follow_up=True)
+            return
+        self._consider(message, ctx, recent, current_id, level)
+
+    def _group_text(self, message):
+        return (message.type in (1, 49) and message.is_group and message.chat_id in self.members.groups and
+                "WXBOT_AT_CHAT_PROBE" not in message.text and not message.data.get("bot_generated") and
+                not is_slash_command(message.text))
+
+    def _addressed(self, message):
+        """艾特机器人、正文里出现本群别名、或引用机器人说过的话，都进入同一套回复。斜杠指令留给对应功能。"""
+        if message.type == 49:
+            quoted = reference(message)
+            return (quoted is not None and quoted.kind == "text" and bool(message.text.strip()) and
+                    self.members.bot_said(message.chat_id, quoted.text))
+        mentioned = bool(message.data.get("is_at_self") and
+                         self.members.account in message.data.get("at_members", ()))
+        return mentioned or self.members.alias_mentioned(message.chat_id, message.text)
+
+    def _answer(self, message, ctx, *, follow_up=False):
+        room, sender = message.chat_id, message.sender_id
         personality = ctx.personality(message)
         started = time.perf_counter()
+        guard = None
         try:
             snapshot = self.members.conversation_snapshot(message)
             prepared = time.perf_counter()
             guard = lambda: ctx.response_guard(snapshot, personality)
-            model_seconds, send_seconds = self.reply_to_member(message, ctx, snapshot, personality, guard)
-            ctx.logger.info("回复耗时 | 群=%s | 人格=%s | 送给模型=%d条 | 窗口=%d条 %.2f秒 | 调用模型 %.2f秒 | 发送含等待 %.2f秒 | 合计 %.2f秒",
-                            message.chat_id, personality.name, len(working_messages(snapshot.messages)),
-                            len(snapshot.messages), prepared - started, model_seconds, send_seconds,
-                            time.perf_counter() - started)
+            if follow_up:
+                result = self._follow_up(message, ctx, snapshot, personality, guard)
+                if result is None:
+                    self.followups.close(room, sender)
+                    ctx.logger.info("接话识别 | 群=%s | 不是在跟机器人说 | 模型 %.2f秒", room, time.perf_counter() - prepared)
+                    return
+                model_seconds, send_seconds = result
+                self.followups.advance(room, sender)
+            else:
+                model_seconds, send_seconds = self.reply_to_member(message, ctx, snapshot, personality, guard)
+                self.followups.open(room, sender)
+            self.gate.engaged(room)
+            ctx.logger.info("回复耗时 | 群=%s | 方式=%s | 人格=%s | 送给模型=%d条 | 窗口=%d条 %.2f秒 | 调用模型 %.2f秒 | 发送含等待 %.2f秒 | 合计 %.2f秒",
+                            room, "接话" if follow_up else "点名", personality.name,
+                            len(working_messages(snapshot.messages)), len(snapshot.messages), prepared - started,
+                            model_seconds, send_seconds, time.perf_counter() - started)
         except SnapshotExpired:
             ctx.logger.info("艾特对话已取消：记录或人格状态已变更")
         except LLMError as error:
-            ctx.logger.warning("艾特对话失败：%.2f秒 | %s", time.perf_counter() - started, error)
+            ctx.logger.warning("%s失败：%.2f秒 | %s", "接话识别" if follow_up else "艾特对话",
+                               time.perf_counter() - started, error)
+            if follow_up or guard is None:
+                return
             try:
                 ctx.reply(message, "暂时无法回复，请稍后再艾特我。", delivery_guard=guard)
             except SnapshotExpired:
                 pass
-
-    def _addressed(self, message):
-        """艾特机器人，或正文里出现本群别名，都进入同一套回复。斜杠指令留给对应功能。"""
-        if (message.type != 1 or not message.is_group or message.chat_id not in self.members.groups or
-                "WXBOT_AT_CHAT_PROBE" in message.text or message.data.get("bot_generated") or
-                is_slash_command(message.text)):
-            return False
-        mentioned = bool(message.data.get("is_at_self") and
-                         self.members.account in message.data.get("at_members", ()))
-        return mentioned or self.members.alias_mentioned(message.chat_id, message.text)
 
     def reply_to_member(self, message, ctx, snapshot, personality, delivery_guard):
         """上下文已准备好，在这里生成并发送给群友的回复。返回模型和发送各自的秒数。"""
@@ -86,6 +131,21 @@ class Plugin:
         reply = personality_text(Dialogue(ctx.llm_for(message, personality=personality)).reply(
             snapshot, diary=diary, memory=memory), personality.name)
         model_seconds = time.perf_counter() - started
+        return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard)
+
+    def _follow_up(self, message, ctx, snapshot, personality, delivery_guard):
+        """模型判断不是在跟机器人说话时返回 None。"""
+        started = time.perf_counter()
+        reply = Dialogue(ctx.llm_for(message, personality=personality)).reply(
+            snapshot, diary=self.members.recent_digests(message.chat_id),
+            memory=self.members.facts_for(message.chat_id, message.sender_id), follow_up=True)
+        model_seconds = time.perf_counter() - started
+        if not reply:
+            return None
+        reply = personality_text(reply, personality.name)
+        return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard)
+
+    def _deliver(self, message, ctx, snapshot, reply, delivery_guard):
         display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
         started = time.perf_counter()
         deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard)
@@ -99,7 +159,7 @@ class Plugin:
             self._remember(message, snapshot, reply)
         except Exception:
             ctx.logger.warning("回复已发出，个人档案没有排队")
-        return model_seconds, send_seconds
+        return send_seconds
 
     def _remember(self, message, snapshot, reply):
         """档案在发出之后才排队，不占用这次回复的等待。"""
@@ -110,28 +170,26 @@ class Plugin:
         worker.remember(message.chat_id, message.sender_id, snapshot.speaker_name,
                         user_text, " ".join(reply.split())[:200], snapshot.generation)
 
-    def _consider(self, message, ctx):
-        """没被点名时先本地筛选。不像该接的话，不会打到模型。"""
-        if not self._can_interject(message):
-            return
-        setting = self.members.room_settings.get(message.chat_id) or {}
-        if not setting.get("proactive_enabled"):
-            return
-        prior = self.members.recent_room_lines(message.chat_id, CONTEXT_SECONDS, CONTEXT_LIMIT)
-        if bot_spoke_recently(prior, self.members.account):
-            return
-        current_id = self._current_id(prior, message)
-        reason = candidate_reason(message.text, prior, current_id=current_id, bot_id=self.members.account)
-        if not reason:
-            return
-        cooldown = setting.get("proactive_cooldown", DEFAULT_COOLDOWN)
-        if type(cooldown) is not int:
-            cooldown = DEFAULT_COOLDOWN
-        if not self.gate.allow(message.chat_id, cooldown, judge_gap(reason)):
-            return
-        self._speak(message, ctx, prior, reason, message.text)
+    def _mute(self, ctx, room):
+        if not self.gate.muted(room):
+            ctx.logger.info("主动插话 | 群=%s | 有人嫌机器人吵，1 小时内不主动开口", room)
+        self.gate.mute(room)
+        self.followups.close(room)
 
-    def _current_id(self, lines, message):
+    def _follows_up(self, message, recent, current_id):
+        room, sender = message.chat_id, message.sender_id
+        if self.followups.active(room, sender):
+            return True
+        if self.followups.exhausted(room, sender):
+            return False
+        return pro.addresses_bot(message.text, recent, current_id, self.members.account)
+
+    def _can_interject(self, message):
+        text = " ".join(message.text.split())
+        return bool(text) and not own_group_command(text) and text.split(maxsplit=1)[0] not in CONTROL
+
+    @staticmethod
+    def _current_id(lines, message):
         text = " ".join(message.text.split())[:200]
         for row in reversed(lines):
             if (row.get("sequence") == message.sequence and row.get("sender_id") == message.sender_id
@@ -139,22 +197,36 @@ class Plugin:
                 return row.get("id")
         return None
 
-    def _can_interject(self, message):
-        if (message.type != 1 or not message.is_group or message.chat_id not in self.members.groups or
-                message.data.get("bot_generated") or message.sender_id == self.members.account or
-                is_slash_command(message.text) or "WXBOT_AT_CHAT_PROBE" in message.text):
-            return False
-        text = " ".join(message.text.split())
-        return bool(text) and not own_group_command(text) and text.split(maxsplit=1)[0] not in CONTROL
+    def _consider(self, message, ctx, recent, current_id, level):
+        """没被点名时先本地筛选。不像该接的话，不会打到模型。"""
+        if pro.bot_spoke_recently(recent, self.members.account):
+            return
+        reason = pro.candidate_reason(message.text, recent, current_id=current_id,
+                                      bot_id=self.members.account, level=level)
+        if not reason:
+            return
+        if not self.gate.allow(message.chat_id, pro.base_cooldown(level), pro.judge_gap(reason)):
+            return
+        self._interject(ctx, message.chat_id, level, reason, message, current_id)
 
-    def _speak(self, message, ctx, prior, reason, current):
+    def _interject(self, ctx, room, level, reason, target, current_id=None):
+        """和点名回复看同一段上下文。模型说不必开口就沉默；判断期间有人先说了也放弃。"""
+        bot = self.members.account
         started = time.perf_counter()
+        hours, _ = self.members.context_window(room)
+        lines = self.members.recent_room_lines(room, hours * 3600, 80)
+        chosen = working_messages(lines)
+        transcript = [transcript_line(row, current=row["id"] == current_id) for row in chosen]
+        recent_bot = [row["text"] for row in chosen if pro.is_bot(row, bot)][-3:]
+        last_id = lines[-1]["id"] if lines else None
+        personality = ctx.personality(target)
         try:
-            personality = ctx.personality(message)
-            result = ctx.llm_for(message, personality=personality).complete_json(
-                judge_system(reason), transcript(prior, current))
-            raw = result.get("reply") if isinstance(result, dict) else ""
-            cleaned = clean_reply(raw)
+            result = ctx.llm_for(target, personality=personality).complete_json(
+                pro.judge_system(reason, level),
+                pro.judge_input(datetime.now(BEIJING).date().isoformat(), transcript,
+                                public_diary(self.members.recent_digests(room)), self._people(room, chosen),
+                                recent_bot))
+            cleaned = pro.clean_reply(result.get("reply") if isinstance(result, dict) else "")
             reply = personality_text(cleaned, personality.name) if cleaned else ""
         except (LLMError, PersonalityExpired) as error:
             ctx.logger.warning("主动插话失败：%.2f秒 | %s", time.perf_counter() - started, error)
@@ -162,17 +234,56 @@ class Plugin:
         elapsed = time.perf_counter() - started
         label = _REASON.get(reason, reason)
         if not reply:
-            ctx.logger.info("主动插话 | 群=%s | 原因=%s | 不说 | 模型 %.2f秒", message.chat_id, label, elapsed)
+            ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | 不说 | 模型 %.2f秒", room, level, label, elapsed)
             return
-        if not ctx.reply(message, reply):
-            ctx.logger.warning("主动插话没有发出 | 群=%s", message.chat_id)
+        if self._moved_on(room, last_id):
+            ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | 有人先说了，放弃 | 模型 %.2f秒",
+                            room, level, label, elapsed)
+            return
+        quote = current_id is not None and isinstance(result, dict) and result.get("quote") is True
+        guard = lambda: ctx.personality_guard(personality)
+        try:
+            if quote:
+                display = self.members.display_name(target.sender_id, room) or "群友"
+                deliver_model_reply(ctx, target, reply, display_name=display, delivery_guard=guard)
+                self.followups.open(room, target.sender_id)
+            elif not ctx.reply(target, reply, delivery_guard=guard):
+                ctx.logger.warning("主动插话没有发出 | 群=%s", room)
+                return
+        except SnapshotExpired:
+            ctx.logger.info("主动插话已取消：人格已切换")
+            return
+        except RuntimeError as error:
+            ctx.logger.warning("主动插话没有发出 | 群=%s | %s", room, error)
             return
         try:
-            self.members.record_bot_reply(message, reply)
+            self.members.record_bot_reply(target, reply)
         except Exception:
             ctx.logger.warning("主动插话已发出，但没有写入群流水")
-        self.gate.mark(message.chat_id)
-        ctx.logger.info("主动插话 | 群=%s | 原因=%s | 已发送 | 模型 %.2f秒", message.chat_id, label, elapsed)
+        self.gate.mark(room)
+        ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | 已发送%s | 模型 %.2f秒",
+                        room, level, label, "（引用）" if quote else "", elapsed)
+
+    def _people(self, room, rows):
+        """窗口里最近说话的几位群友的档案。"""
+        people, seen = [], set()
+        for row in reversed(rows):
+            sender = row.get("sender_id")
+            if not sender or pro.is_bot(row, self.members.account) or sender in seen:
+                continue
+            seen.add(sender)
+            facts = public_memory(self.members.facts_for(room, sender))
+            if facts:
+                people.append({"name": row.get("speaker") or "群友", "memory": facts})
+            if len(seen) >= 4:
+                break
+        return people
+
+    def _moved_on(self, room, last_id):
+        if last_id is None:
+            return False
+        return any(row["id"] > last_id and not pro.is_bot(row, self.members.account)
+                   for row in self.members.recent_room_lines(room, 600, 10))
 
     def _cold_loop(self, ctx):
         """群里刚才还在聊、又安静了一会儿时，单独看要不要接一句。"""
@@ -194,21 +305,23 @@ class Plugin:
             self._cold_room(ctx, room)
 
     def _cold_room(self, ctx, room):
-        setting = self.members.room_settings.get(room) or {}
-        if not setting.get("proactive_enabled") or "mention_chat" in self.members.disabled_plugins(room):
+        if "mention_chat" in self.members.disabled_plugins(room):
             return
-        lines = self.members.recent_room_lines(room, COLD_MAX_SECONDS, CONTEXT_LIMIT)
-        if not lines or bot_spoke_recently(lines, self.members.account):
+        level = self.members.room_activity(room)
+        if level < pro.REASON_LEVEL["cold"] or self.gate.muted(room):
             return
-        age = lines[-1].get("age_seconds")
-        if not isinstance(age, (int, float)) or not COLD_MIN_SECONDS <= age <= COLD_MAX_SECONDS:
+        lines = self.members.recent_room_lines(room, pro.COLD_MAX_SECONDS, 12)
+        if not lines or pro.bot_spoke_recently(lines, self.members.account):
             return
-        cooldown = setting.get("proactive_cooldown", DEFAULT_COOLDOWN)
-        if type(cooldown) is not int:
-            cooldown = DEFAULT_COOLDOWN
-        if not self.gate.allow(room, cooldown, 60):
+        last = lines[-1]
+        age = last.get("age_seconds")
+        # 同一段安静只判断一次。
+        if (not isinstance(age, (int, float)) or not pro.COLD_MIN_SECONDS <= age <= pro.COLD_MAX_SECONDS or
+                self._cold_seen.get(room) == last["id"]):
             return
+        if not self.gate.allow(room, pro.base_cooldown(level), pro.COLD_JUDGE_GAP):
+            return
+        self._cold_seen[room] = last["id"]
         anchor = Message("", room, sender_id=self.members.account, is_group=True,
-                         session_id=lines[-1].get("session_id") or "", sequence=0)
-        earlier = self.members.recent_room_lines(room, COLD_CONTEXT_SECONDS, CONTEXT_LIMIT)
-        self._speak(anchor, ctx, earlier or lines, "cold", "")
+                         session_id=last.get("session_id") or "", sequence=0)
+        self._interject(ctx, room, level, "cold", anchor)

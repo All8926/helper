@@ -681,6 +681,31 @@ class MemberStore:
         return (setting.get("context_hours", DEFAULT_CONTEXT_HOURS),
                 setting.get("context_limit", DEFAULT_CONTEXT_LIMIT))
 
+    def room_activity(self, room):
+        """0–10。没写时看旧的主动插话开关。"""
+        from .room_behavior import BehaviorError, normalize_activity
+        setting = self.room_settings.get(room) or {}
+        try:
+            return normalize_activity(setting.get("activity"), setting.get("proactive_enabled"))
+        except BehaviorError:
+            return 0
+
+    def bot_said(self, room, text, limit=50):
+        """被引用的文字是不是机器人最近在本群说过的话。微信引用里不带作者 ID，只能比对正文。"""
+        quoted = " ".join(str(text or "").split()).rstrip("…. ")
+        if len(quoted) < 2:
+            return False
+        with self._lock:
+            rows = self._connection().execute(
+                """SELECT text FROM messages WHERE account=? AND room=? AND bot_generated=1
+                   ORDER BY id DESC LIMIT ?""", (self.account, room, limit)).fetchall()
+        head = quoted[:30]
+        for row in rows:
+            said = " ".join(row["text"].split())
+            if said == quoted or (len(head) >= 4 and said.startswith(head)):
+                return True
+        return False
+
     def _context_speaker(self, room, sender_id, bot_generated):
         """流水里标出发言人。机器人自己的回复用本群别名，没有别名就标成机器人。"""
         if bot_generated or sender_id == self.account:
@@ -844,6 +869,7 @@ class MemberStore:
                     "bot": bool(row["bot_generated"]),
                     "session_id": row["session_id"] or "",
                     "sequence": row["sequence"],
+                    "received_at": row["received_at"],
                     "speaker": self._context_speaker(room, row["sender_id"], row["bot_generated"]),
                     "age_seconds": self._line_age(row["received_at"]),
                 })
@@ -933,7 +959,9 @@ class MemberStore:
         return self.record(reply)
 
     def record(self, message):
-        if not self.history_enabled or message.type != 1 or not message.is_group or message.chat_id not in self.groups:
+        # 引用回复的新正文也是群聊文字，一并记下，上下文才连得上。
+        quote = message.type == 49 and message.data.get("app_type") == 57 and bool(str(message.text).strip())
+        if not self.history_enabled or (message.type != 1 and not quote) or not message.is_group or message.chat_id not in self.groups:
             return False
         if message.data.get("self_wxid", self.account) != self.account:
             return False
