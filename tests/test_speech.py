@@ -9,7 +9,7 @@ from test_tts import wav
 from plugins.voice_reply import Plugin
 from plugins.mention_chat import Plugin as ChatPlugin
 from wxbot_framework.members import SnapshotExpired
-from wxbot_framework.speech import SpeechController, deliver_model_reply, speech_chunks
+from wxbot_framework.speech import SpeechController, deliver_model_reply, prefer_voice, speech_chunks
 from wxbot_framework.text import own_group_command
 from wxbot_framework.tts import TTSError, Voice, VoicePage
 
@@ -30,8 +30,9 @@ class SpeechTests(unittest.TestCase):
         self.client = Mock(default_voice=FIRST.name, max_chars_per_clip=20)
         self.client.voices.return_value = (FIRST, SECOND)
         self.client.public_voices.return_value = VoicePage((), 1, 10, False)
+        self.client.accepts.side_effect = lambda value: isinstance(value, str) and len(value) == 32 and set(value) <= set('0123456789abcdef')
         self.client.synthesize.return_value = wav()
-        with patch('wxbot_framework.speech.FishTTS.from_file', return_value=self.client):
+        with patch('wxbot_framework.speech.open_tts', return_value=self.client):
             self.speech.reload()
         self.ctx._speech = self.speech
         self.voice_paths = []
@@ -142,6 +143,31 @@ class SpeechTests(unittest.TestCase):
         self.assertTrue(payloads)
         self.assertIn('今天写代码', payloads[-1])
 
+    def test_auto_mode_follows_the_model_unless_the_line_should_be_read(self):
+        self.assertFalse(prefer_voice('看这个 https://example.com', True, 'auto', 160))
+        self.assertFalse(prefer_voice('订单号 13800138000', True, 'auto', 160))
+        self.assertFalse(prefer_voice('好的', None, 'auto', 160))
+        self.assertTrue(prefer_voice('很长的一段也照样念', False, 'always', 4))
+        self.setup_speech()
+        self.speech.select(ROOM, FIRST.name)
+        self.speech.select(ROOM, '自动')
+        deliver_model_reply(self.ctx, self.message('提问'), '继续保持。', speak=True)
+        self.assertEqual(self.backend.sent, [(ROOM, 'voice')])
+        deliver_model_reply(self.ctx, self.message('再问', sequence=2), '看 https://example.com/a', speak=True)
+        self.assertIn('https://example.com/a', self.backend.sent[-1][1])
+        self.assertEqual(self.client.synthesize.call_count, 1)
+        self.ctx._llm = Mock(complete_json=Mock(return_value={'reply': '我念给你听。', 'voice': True}))
+        msg = self.message('@机器人\u2005讲一下', sequence=3, data={'is_at_self': True, 'at_members': [daily.ROBOT]})
+        self.store.record(msg)
+        plugin = ChatPlugin()
+        plugin.on_load(self.ctx)
+        try:
+            plugin.on_message(msg, self.ctx)
+            self.assertIn('"voice":false', self.ctx._llm.complete_json.call_args.args[0])
+            self.assertEqual(self.client.synthesize.call_count, 2)
+        finally:
+            plugin.on_unload(self.ctx)
+
     def test_chunks_do_not_lose_text(self):
         text = '第一句话。第二句话！第三句话很长很长很长很长。'
         chunks = list(speech_chunks(text, 12))
@@ -215,7 +241,7 @@ class SpeechTests(unittest.TestCase):
         self.speech.select(ROOM, public.id)
         self.assertEqual(self.speech.selected(ROOM)[1], public)
         self.client.public_voice.assert_called_once_with(public.id)
-        with patch('wxbot_framework.speech.FishTTS.from_file', return_value=self.client):
+        with patch('wxbot_framework.speech.open_tts', return_value=self.client):
             self.speech.reload()
         self.assertEqual(self.speech.selected(ROOM)[1], public)
         self.assertEqual(self.client.public_voice.call_count, 2)
@@ -223,7 +249,7 @@ class SpeechTests(unittest.TestCase):
     def test_reload_during_public_fetch_cancels_stale_response(self):
         self.setup_speech()
         def fetch(**kwargs):
-            with patch('wxbot_framework.speech.FishTTS.from_file', return_value=self.client):
+            with patch('wxbot_framework.speech.open_tts', return_value=self.client):
                 self.speech.reload()
             return VoicePage((), 1, 10, False)
         self.client.public_voices.side_effect = fetch

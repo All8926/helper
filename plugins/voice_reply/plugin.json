@@ -1,7 +1,7 @@
 {
   "api": "v1",
   "default_enabled": false,
-  "description": "按群选择 Fish Audio 音色，艾特机器人后用语音回复",
+  "description": "按群选择 Fish Audio 或 Breeze Blue 音色；可始终语音，或按内容决定语音还是文字",
   "message_types": [
     1
   ],

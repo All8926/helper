@@ -508,6 +508,30 @@ class HTTPTests(PanelFixture):
         self.assertTrue(all(len(part.encode('utf-8')) <= 1023 for part in calls))
 
 
+    def test_group_voice_mode_can_be_saved_after_a_voice_is_chosen(self):
+        from wxbot_framework.members import MemberStore
+        bot = read_json(self.root / 'bot_config.json')
+        bot['wechat_account'] = 'wxid_test_robot'
+        (self.root / 'bot_config.json').write_text(json.dumps(bot), encoding='utf-8')
+        path = self.root / 'members_config.json'
+        members = read_json(path)
+        room = '123@chatroom'
+        members['groups'] = {room: []}
+        path.write_text(json.dumps(members), encoding='utf-8')
+        store = MemberStore(path, 'wxid_test_robot')
+        self.addCleanup(store.close)
+        with self.assertRaisesRegex(PanelError, '选择音色'):
+            self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto'})
+        self.assertNotIn(room, read_json(path).get('room_settings') or {})
+        store.set_voice(room, 'a' * 32, '测试甲')
+        saved = self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto'})
+        self.assertEqual(saved['room_voices'][room]['mode'], 'auto')
+        self.assertEqual(saved['room_voices'][room]['name'], '测试甲')
+        self.assertEqual(saved['room_settings'][room]['activity'], 2)
+        self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'off'})
+        self.assertFalse(self.controller.configuration()['room_voices'][room]['enabled'])
+
+
 class LogTests(unittest.TestCase):
     def test_log_ring_buffer_hides_common_keys_and_obeys_cursor(self):
         buffer=LogBuffer()

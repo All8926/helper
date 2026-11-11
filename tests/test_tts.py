@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import wave
 
-from wxbot_framework.tts import FishTTS, TTSError, normalize_wav
+from wxbot_framework.tts import BreezeTTS, FishTTS, TTSError, client_from_options, normalize_wav
 
 
 def wav(seconds=0.1, rate=24000, channels=1):
@@ -125,6 +125,26 @@ class TTSTests(unittest.TestCase):
                     FishTTS.from_file(path)
             path.write_text(json.dumps(valid), encoding='utf-8')
             self.assertEqual(FishTTS.from_file(path).model, 's2.1-pro-free')
+
+    def test_missing_provider_stays_on_fish_and_breeze_uses_its_own_contract(self):
+        self.assertIsInstance(client_from_options({'api_key': 'placeholder'}), FishTTS)
+        with self.assertRaises(TTSError):
+            client_from_options({'provider': 'breeze', 'api_key': 'placeholder', 'model': 's2.1-pro-free'})
+        client = BreezeTTS('https://api.breeze.blue', 'test-only-placeholder')
+        voice = {'voice_id': 'voc_xeh3w54cqvnp', 'name': '小蓝'}
+        with patch.object(BreezeTTS, '_request', return_value=json.dumps(
+                {'voices': [voice, {'voice_id': 'nope', 'name': '坏'}], 'has_more': False}).encode()) as request:
+            self.assertEqual(client.public_voices(keyword='温柔').voices[0].id, voice['voice_id'])
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.call_args.args[0]).query)
+        self.assertEqual(query['voice_type'], ['default'])
+        self.assertEqual(query['language_code'], ['zh'])
+        self.assertEqual(query['search'], ['温柔'])
+        with patch.object(BreezeTTS, '_request', return_value=wav()) as request:
+            client.synthesize('你好', voice['voice_id'])
+        self.assertEqual(request.call_args.kwargs['payload'], {'text': '你好', 'model_id': 'breeze-tts-2'})
+        self.assertIn('/v1/text-to-speech/voc_xeh3w54cqvnp', request.call_args.args[0])
+        self.assertIn('wav_24000', request.call_args.args[0])
+        self.assertNotIn(client.api_key, repr(client))
 
 
 if __name__ == '__main__':

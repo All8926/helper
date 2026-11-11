@@ -313,6 +313,7 @@ function readBehaviorForm() {
     context_limit: contextNumber($('#behavior-limit').value, 300),
     activity: contextNumber($('#behavior-activity').value, 0),
     glance_minutes: contextNumber($('#behavior-glance').value, 2),
+    voice_mode: $('#behavior-voice').value,
     plugin_options: readNoticeOptions()};
 }
 function readNoticeOptions() {
@@ -374,6 +375,13 @@ function showBehavior(room) {
   $('#behavior-limit').value = saved.context_limit || 300;
   $('#behavior-activity').value = Number.isInteger(saved.activity) ? saved.activity : (saved.proactive_enabled === true ? 5 : 0);
   $('#behavior-glance').value = Number.isInteger(saved.glance_minutes) ? saved.glance_minutes : 2;
+  const voice = config?.room_voices?.[room] || {};
+  const voiceMode = saved.voice_mode || (!voice.voice_id || voice.enabled === false ? 'off' : (voice.mode === 'auto' ? 'auto' : 'always'));
+  $('#behavior-voice').value = ['off', 'always', 'auto'].includes(voiceMode) ? voiceMode : 'off';
+  const voiceHint = $('#behavior-voice-hint');
+  if (voiceHint) voiceHint.textContent = voice.name
+    ? `当前音色：${voice.name}。自动会按内容决定念出来还是打字。`
+    : '还没选音色。先在群里发送 /音色 名称，再把这里改成始终语音或自动。';
   const notice = (saved.plugin_options || {}).group_notice || {};
   $('#behavior-welcome').value = notice.welcome_template || '';
   $('#behavior-leave').value = notice.leave_template || '';
@@ -510,7 +518,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-voice', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-member-search').oninput = () => {
   if ($('#behavior-member-search').value.trim()) membersExpanded = true;
@@ -533,7 +541,10 @@ $('#behavior-form').onsubmit = event => {
   action(async () => {
     const room = $('#behavior-room').value;
     if (!room) throw new Error('请先添加并保存支持的群聊');
-    await api('room-behavior', {room, setting: readBehaviorForm()});
+    const setting = readBehaviorForm();
+    const voiceMode = setting.voice_mode;
+    delete setting.voice_mode;
+    await api('room-behavior', {room, setting, voice_mode: voiceMode});
     behaviorDirty = false;
     behaviorDraft.clear();
     await loadConfig();
@@ -731,7 +742,7 @@ function showModelProfile(name) {
   const id = form.querySelector('[data-profile-id]').value;
   profileSelection[name] = id;
   const chosen = profileList(name).find(item => item.id === id) || config?.[name] || {};
-  fill(form, {...(name === 'llm' ? {json_mode:true, token_limit_parameter:'max_tokens', extra_body:{}} : {}), ...chosen});
+  fill(form, {...(name === 'llm' ? {json_mode:true, token_limit_parameter:'max_tokens', extra_body:{}} : {provider:'fish'}), ...chosen});
   form.elements.api_key.value = chosen.api_key || '';
   form.elements.clear_api_key.checked = false;
   $('.key-state', form).textContent = chosen.api_key_configured ? '已配置' : '尚未配置';
@@ -771,6 +782,18 @@ for (const name of ['llm','tts']) {
     action(() => save({[name + '_profile']: profileRequest(form, 'delete')}));
   };
 }
+$('#tts-form').elements.provider.onchange = event => {
+  const form = event.target.form;
+  const model = form.elements.model;
+  const base = form.elements.base_url;
+  if (event.target.value === 'breeze') {
+    if (!model.value.startsWith('breeze-')) model.value = 'breeze-tts-2';
+    if (!base.value || base.value.includes('fish.audio')) base.value = 'https://api.breeze.blue';
+  } else if (model.value.startsWith('breeze-')) {
+    model.value = 's2.1-pro-free';
+    if (!base.value || base.value.includes('breeze.blue')) base.value = 'https://api.fish.audio';
+  }
+};
 $('#delay-form').onsubmit=e=>{e.preventDefault();const f=e.target.elements;action(()=>save({text_send_delay:{enabled:f.enabled.checked,characters_per_group:Number(f.characters_per_group.value),min_seconds:Number(f.min_seconds.value),max_seconds:Number(f.max_seconds.value)}}));};
 $('#discover-chats').onclick=()=>action(async()=>{
   const {chats}=await api('chats');discoveredGroups=chats.filter(c=>c.is_group||c.chat_id?.endsWith('@chatroom'));

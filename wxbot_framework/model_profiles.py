@@ -11,7 +11,7 @@ SYNTHETIC = {"llm": "current-llm", "tts": "current-tts"}
 FIELDS = {
     "llm": ("base_url", "model", "timeout_seconds", "max_tokens", "json_mode",
             "token_limit_parameter", "extra_body"),
-    "tts": ("base_url", "model", "timeout_seconds", "default_voice", "max_chars_per_clip"),
+    "tts": ("provider", "base_url", "model", "timeout_seconds", "default_voice", "max_chars_per_clip"),
 }
 
 
@@ -204,5 +204,5 @@ def _validate(kind, doc):
         from .llm import LLMClient
         LLMClient(trial)
     else:
-        from .tts import FishTTS
-        FishTTS.from_options(trial)
+        from .tts import client_from_options
+        client_from_options(trial)

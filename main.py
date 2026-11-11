@@ -72,8 +72,8 @@ def main():
                         from wxbot_framework.llm import LLMClient
                         LLMClient.from_file(store.path.parent / config.get("llm_config_file", "llm_config.json"))
                     if spec.name == "voice_reply":
-                        from wxbot_framework.tts import FishTTS
-                        FishTTS.from_file(store.path.parent / config.get("tts_config_file", "tts_config.json"))
+                        from wxbot_framework.tts import open_tts
+                        open_tts(store.path.parent / config.get("tts_config_file", "tts_config.json"))
                 print(json.dumps({"name": spec.name, "enabled": enabled, "api": spec.api,
                                   "description": spec.description,
                                   "missing_capabilities": sorted(spec.requires - plugins.capabilities)}, ensure_ascii=False))

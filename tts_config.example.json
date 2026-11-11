@@ -1,4 +1,5 @@
 {
+  "provider": "fish",
   "base_url": "https://api.fish.audio",
   "api_key": "",
   "model": "s2.1-pro-free",

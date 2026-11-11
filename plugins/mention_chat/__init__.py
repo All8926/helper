@@ -135,27 +135,29 @@ class Plugin:
         started = time.perf_counter()
         diary = self.members.recent_digests(message.chat_id)
         memory = self.members.facts_for(message.chat_id, message.sender_id)
-        reply = personality_text(Dialogue(ctx.llm_for(message, personality=personality)).reply(
-            snapshot, diary=diary, memory=memory), personality.name)
+        reply, speak = Dialogue(ctx.llm_for(message, personality=personality)).reply(
+            snapshot, diary=diary, memory=memory, choose_voice=self._auto_voice(message.chat_id))
+        reply = personality_text(reply, personality.name)
         model_seconds = time.perf_counter() - started
-        return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard)
+        return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
 
     def _follow_up(self, message, ctx, snapshot, personality, delivery_guard):
         """模型判断不是在跟机器人说话时返回 None。"""
         started = time.perf_counter()
-        reply = Dialogue(ctx.llm_for(message, personality=personality)).reply(
+        reply, speak = Dialogue(ctx.llm_for(message, personality=personality)).reply(
             snapshot, diary=self.members.recent_digests(message.chat_id),
-            memory=self.members.facts_for(message.chat_id, message.sender_id), follow_up=True)
+            memory=self.members.facts_for(message.chat_id, message.sender_id), follow_up=True,
+            choose_voice=self._auto_voice(message.chat_id))
         model_seconds = time.perf_counter() - started
         if not reply:
             return None
         reply = personality_text(reply, personality.name)
-        return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard)
+        return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
 
-    def _deliver(self, message, ctx, snapshot, reply, delivery_guard):
+    def _deliver(self, message, ctx, snapshot, reply, delivery_guard, speak=None):
         display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
         started = time.perf_counter()
-        deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard)
+        deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard, speak=speak)
         send_seconds = time.perf_counter() - started
         # 发出去之后才记。写库失败不影响已经发出的回复。
         try:
@@ -205,6 +207,14 @@ class Plugin:
             return False
         return pro.addresses_bot(message.text, recent, current_id, self.members.account)
 
+    def _auto_voice(self, room):
+        """本群开了语音、并且设成自动时，才让模型决定这句念不念。"""
+        speech = getattr(self.ctx, "_speech", None)
+        if speech is None or not speech.enabled:
+            return False
+        state = self.members.voice_selection(room)
+        return bool(state.enabled and state.mode == "auto" and state.voice_id)
+
     def _can_interject(self, message):
         text = " ".join(message.text.split())
         return bool(text) and not own_group_command(text) and text.split(maxsplit=1)[0] not in CONTROL
@@ -241,9 +251,10 @@ class Plugin:
         recent_bot = [row["text"] for row in chosen if pro.is_bot(row, bot)][-3:]
         last_id = lines[-1]["id"] if lines else None
         personality = ctx.personality(target)
+        choose_voice = self._auto_voice(room)
         try:
             result = ctx.llm_for(target, personality=personality).complete_json(
-                pro.judge_system(reason, level),
+                pro.judge_system(reason, level, choose_voice=choose_voice),
                 pro.judge_input(datetime.now(BEIJING).date().isoformat(), transcript,
                                 public_diary(self.members.recent_digests(room)), self._people(room, chosen),
                                 recent_bot))
@@ -263,15 +274,17 @@ class Plugin:
                             room, level, label, basis, elapsed)
             return
         quote = current_id is not None and isinstance(result, dict) and result.get("quote") is True
+        speak = result.get("voice") if choose_voice and isinstance(result, dict) else None
+        if type(speak) is not bool:
+            speak = None
         guard = lambda: ctx.personality_guard(personality)
         try:
             if quote:
                 display = self.members.display_name(target.sender_id, room) or "群友"
-                deliver_model_reply(ctx, target, reply, display_name=display, delivery_guard=guard)
+                deliver_model_reply(ctx, target, reply, display_name=display, delivery_guard=guard, speak=speak)
                 self.followups.open(room, target.sender_id)
-            elif not ctx.reply(target, reply, delivery_guard=guard):
-                ctx.logger.warning("主动插话没有发出 | 群=%s", room)
-                return
+            else:
+                deliver_model_reply(ctx, target, reply, delivery_guard=guard, speak=speak)
         except SnapshotExpired:
             ctx.logger.info("主动插话已取消：人格已切换")
             return

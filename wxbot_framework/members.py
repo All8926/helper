@@ -80,6 +80,7 @@ class VoiceSelection:
     name: str = ""
     enabled: bool = True
     generation: int = 0
+    mode: str = "always"
 
 
 def name_key(value):
@@ -225,7 +226,7 @@ class MemberStore:
                 CREATE TABLE IF NOT EXISTS room_voices (
                     account TEXT NOT NULL, room TEXT NOT NULL, voice_id TEXT NOT NULL,
                     name TEXT NOT NULL, enabled INTEGER NOT NULL, generation INTEGER NOT NULL,
-                    PRIMARY KEY(account,room));
+                    mode TEXT NOT NULL DEFAULT 'always', PRIMARY KEY(account,room));
                 CREATE TABLE IF NOT EXISTS room_digests (
                     account TEXT NOT NULL, room TEXT NOT NULL, local_day TEXT NOT NULL,
                     summary TEXT NOT NULL, PRIMARY KEY(account,room,local_day));
@@ -245,6 +246,8 @@ class MemberStore:
                 db.execute("ALTER TABLE people ADD COLUMN self_named INTEGER NOT NULL DEFAULT 0")
             if "bot_generated" not in {row["name"] for row in db.execute("PRAGMA table_info(messages)")}:
                 db.execute("ALTER TABLE messages ADD COLUMN bot_generated INTEGER NOT NULL DEFAULT 0")
+            if "mode" not in {row["name"] for row in db.execute("PRAGMA table_info(room_voices)")}:
+                db.execute("ALTER TABLE room_voices ADD COLUMN mode TEXT NOT NULL DEFAULT 'always'")
             with db:
                 for room, key, name, display, wxid, aliases in self.profiles:
                     existing = db.execute("SELECT wxid FROM people WHERE account=? AND room=? AND person_key=?",
@@ -639,11 +642,14 @@ class MemberStore:
     def voice_selection(self, room):
         with self._lock:
             row = self._connection().execute(
-                "SELECT voice_id,name,enabled,generation FROM room_voices WHERE account=? AND room=?",
+                "SELECT voice_id,name,enabled,generation,mode FROM room_voices WHERE account=? AND room=?",
                 (self.account, room)).fetchone()
-            return VoiceSelection(room, row[0], row[1], bool(row[2]), row[3]) if row else VoiceSelection(room)
+            if not row:
+                return VoiceSelection(room)
+            mode = row["mode"] if row["mode"] in ("always", "auto") else "always"
+            return VoiceSelection(room, row["voice_id"], row["name"], bool(row["enabled"]), row["generation"], mode)
 
-    def set_voice(self, room, voice_id, name, *, enabled=True):
+    def set_voice(self, room, voice_id, name, *, enabled=True, mode=None):
         from .tts import VOICE_ID
         if room not in self.groups or type(enabled) is not bool:
             raise MemberError("请在已配置的群中切换音色")
@@ -651,16 +657,46 @@ class MemberStore:
             raise MemberError("音色 ID 无效")
         if not isinstance(name, str) or len(name) > 128 or any(ord(ch) < 32 for ch in name):
             raise MemberError("音色名称无效")
+        if mode is not None and mode not in ("always", "auto"):
+            raise MemberError("语音方式应为始终或自动")
         with self._lock, self._connection() as db:
             current = self.voice_selection(room)
             if not enabled:
                 voice_id, name = current.voice_id, current.name
-            if (current.voice_id, current.name, current.enabled) != (voice_id, name, enabled):
-                db.execute("""INSERT INTO room_voices VALUES(?,?,?,?,?,?)
+                mode = current.mode
+            elif mode is None:
+                mode = current.mode
+            if (current.voice_id, current.name, current.enabled, current.mode) != (voice_id, name, enabled, mode):
+                db.execute("""INSERT INTO room_voices(account,room,voice_id,name,enabled,generation,mode)
+                    VALUES(?,?,?,?,?,?,?)
                     ON CONFLICT(account,room) DO UPDATE SET voice_id=excluded.voice_id,
-                    name=excluded.name,enabled=excluded.enabled,generation=excluded.generation""",
-                    (self.account, room, voice_id, name, int(enabled), current.generation + 1))
+                    name=excluded.name,enabled=excluded.enabled,generation=excluded.generation,mode=excluded.mode""",
+                    (self.account, room, voice_id, name, int(enabled), current.generation + 1, mode))
             return self.voice_selection(room)
+
+    def voice_modes(self):
+        """各群当前音色和语音方式，给管理台。没选过的群不在这里。"""
+        with self._lock:
+            rows = self._connection().execute(
+                "SELECT room, voice_id, name, enabled, mode FROM room_voices WHERE account=?",
+                (self.account,)).fetchall()
+        result = {}
+        for row in rows:
+            result[row["room"]] = {"voice_id": row["voice_id"], "name": row["name"],
+                                   "enabled": bool(row["enabled"]),
+                                   "mode": row["mode"] if row["mode"] in ("always", "auto") else "always"}
+        return result
+
+    def set_voice_mode(self, room, mode):
+        """关闭、始终语音或自动。后两种要已经在群里选过音色。"""
+        if mode == "off":
+            return self.set_voice(room, "", "", enabled=False)
+        if mode not in ("always", "auto"):
+            raise MemberError("语音回复应为关闭、始终语音或自动")
+        current = self.voice_selection(room)
+        if not current.voice_id:
+            raise MemberError("请先在群里用 /音色 选择音色，再切换始终语音或自动")
+        return self.set_voice(room, current.voice_id, current.name, enabled=True, mode=mode)
 
     @contextmanager
     def voice_delivery_guard(self, state):

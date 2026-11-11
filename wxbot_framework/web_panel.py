@@ -317,11 +317,13 @@ class PanelController:
             if name in ('llm', 'tts'):
                 raw_models[name] = value
                 result[name] = {key: value[key] for key in
-                    ('base_url', 'model', 'timeout_seconds', 'max_tokens', 'json_mode',
+                    ('provider', 'base_url', 'model', 'timeout_seconds', 'max_tokens', 'json_mode',
                      'token_limit_parameter', 'extra_body', 'default_voice', 'max_chars_per_clip') if key in value}
                 if name == 'llm':
                     for key, default in (('json_mode', True), ('token_limit_parameter', 'max_tokens'), ('extra_body', {})):
                         result[name].setdefault(key, default)
+                if name == 'tts':
+                    result[name].setdefault('provider', 'fish')
                 result[name]['api_key_configured'] = bool(value.get('api_key'))
                 result[name]['api_key'] = value.get('api_key') or ''
             else:
@@ -331,6 +333,7 @@ class PanelController:
                 result['daily_clear'] = value.get('daily_clear', True)
                 result.update(view_behavior(value))
         result['model_profiles'] = view_library(load_profiles(self.workspace / PROFILE_FILENAME), raw_models)
+        result['room_voices'] = self._room_voices()
         return result
 
     def message_tail(self, after=0):
@@ -445,14 +448,66 @@ class PanelController:
                 raise PanelError('机器人正在停止，请稍后重试', 409)
             app = self.app
         try:
+            if 'voice_mode' in data and data.get('voice_mode') != 'off':
+                self._require_saved_voice(data.get('room'))
             members = getattr(app, 'members', None) if app is not None else None
             if members is not None:
                 members.update_behavior(data)
             else:
                 self._write_behavior_file(data)
+            if 'voice_mode' in data:
+                self._apply_voice_mode(data.get('room'), data.get('voice_mode'))
         except (BehaviorError, MemberError, ValueError) as error:
             raise PanelError(str(error)) from None
         return self.configuration()
+
+    def _open_members(self):
+        """机器人在跑时用它自己的成员目录。没启动时临时打开同一份库。"""
+        with self.lock:
+            app = self.app
+        live = getattr(app, 'members', None) if app is not None else None
+        if live is not None:
+            return live, False
+        config = self.store.load()
+        if not config.get('wechat_account'):
+            return None, False
+        from .members import MemberError, MemberStore
+        try:
+            store = MemberStore.from_config(config, self.workspace)
+        except MemberError:
+            return None, False
+        return store, store is not None
+
+    def _room_voices(self):
+        store, owned = self._open_members()
+        if store is None:
+            return {}
+        try:
+            return store.voice_modes()
+        except Exception:
+            return {}
+        finally:
+            if owned:
+                store.close()
+
+    def _require_saved_voice(self, room):
+        store, owned = self._open_members()
+        try:
+            if store is None or not store.voice_selection(room).voice_id:
+                raise MemberError('请先在群里用 /音色 选择音色，再切换始终语音或自动')
+        finally:
+            if owned and store is not None:
+                store.close()
+
+    def _apply_voice_mode(self, room, mode):
+        store, owned = self._open_members()
+        if store is None:
+            raise MemberError('请先设置微信账号，才能保存各群的语音方式')
+        try:
+            store.set_voice_mode(room, mode)
+        finally:
+            if owned:
+                store.close()
 
     def _write_behavior_file(self, data):
         config = self.store.load()

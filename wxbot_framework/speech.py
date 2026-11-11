@@ -4,13 +4,17 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 import hashlib
 from pathlib import Path
+import re
 import tempfile
 import threading
 import time
 
 from .members import SnapshotExpired
 from .summary import split_text
-from .tts import FishTTS, TTSError, VOICE_ID
+from .tts import TTSError, open_tts
+
+# 链接、代码块不适合念出来。
+_UNSPEAKABLE = re.compile(r"https?://|www\.\S+|```|`[^`]{6,}`")
 
 
 def speech_chunks(text, limit):
@@ -25,6 +29,21 @@ def speech_chunks(text, limit):
         part, text = text[:cut].strip(), text[cut:].strip()
         if part:
             yield part
+
+
+def prefer_voice(text, requested, mode, limit):
+    """始终语音直接念。自动时先挡掉不该念的，其余只在模型明确要求时用语音。"""
+    if mode != "auto":
+        return True
+    collapsed = " ".join(str(text or "").split())
+    if not collapsed or len(collapsed) > limit:
+        return False
+    if _UNSPEAKABLE.search(str(text or "")) or sum(ch in "{}[]=<>" for ch in collapsed) >= 6:
+        return False
+    digits = sum(ch.isdigit() for ch in collapsed)
+    if digits >= 6 and digits * 2 >= len(collapsed):
+        return False
+    return requested is True
 
 
 class SpeechController:
@@ -47,7 +66,7 @@ class SpeechController:
     def reload(self):
         if self.members is None:
             raise TTSError("语音回复需要配置成员目录，以保存各群音色")
-        client = FishTTS.from_file(self.path)
+        client = open_tts(self.path)
         with self._lock:
             self._client, self._catalog, self._catalog_time = client, (), 0
             self._public_pages.clear()
@@ -112,7 +131,11 @@ class SpeechController:
         if not isinstance(value, str) or not value or len(value) > 128:
             raise TTSError('请发送 /查看音色，选择音色名称或 ID')
         matches = [voice for voice in self.catalog() if voice.id == value or voice.name.casefold() == value.casefold()]
-        if not matches and VOICE_ID.fullmatch(value):
+        with self._lock:
+            client = self._client
+        if client is None:
+            raise TTSError("语音配置未加载")
+        if not matches and client.accepts(value):
             return self._public_voice(value)
         if not matches:
             candidates = {}
@@ -144,10 +167,18 @@ class SpeechController:
         return state, self.resolve(state.voice_id or client.default_voice)
 
     def select(self, room, name):
+        current = self.members.voice_selection(room)
         if name in ('关闭', '文字'):
             return self.members.set_voice(room, '', '', enabled=False)
+        if name in ('自动', '始终'):
+            if not current.voice_id:
+                raise TTSError('请先用 /音色 名称 选择音色，再切换自动或始终语音')
+            return self.members.set_voice(room, current.voice_id, current.name, enabled=True,
+                                          mode='auto' if name == '自动' else 'always')
         voice = self.resolve(name)
-        return self.members.set_voice(room, voice.id, voice.name)
+        # 已经是自动时换音色，继续自动。从关闭重新选音色，回到始终语音。
+        mode = 'auto' if current.enabled and current.mode == 'auto' else 'always'
+        return self.members.set_voice(room, voice.id, voice.name, mode=mode)
 
     def close(self):
         with self._lock:
@@ -157,12 +188,20 @@ class SpeechController:
             self._public_pages.clear()
             self._public_voices.clear()
 
-    def reply(self, ctx, message, text, *, delivery_guard=None):
+    def reply(self, ctx, message, text, *, delivery_guard=None, speak=None):
         state, voice = self.selected(message.chat_id)
         if voice is None:
             return False
         with self._lock:
             client, generation = self._client, self._generation
+        if client is None:
+            raise TTSError("语音配置未加载")
+        if not prefer_voice(text, speak, state.mode, client.max_chars_per_clip):
+            if state.mode == "auto":
+                ctx.logger.info("回复形式 | 群=%s | 文字", message.chat_id)
+            return False
+        if state.mode == "auto":
+            ctx.logger.info("回复形式 | 群=%s | 语音", message.chat_id)
 
         @contextmanager
         def guard():
@@ -203,11 +242,11 @@ class SpeechController:
         return True
 
 
-def deliver_model_reply(ctx, message, text, *, display_name=None, delivery_guard=None):
+def deliver_model_reply(ctx, message, text, *, display_name=None, delivery_guard=None, speak=None):
     speech = getattr(ctx, '_speech', None)
     if speech is not None and speech.enabled is True:
         try:
-            if speech.reply(ctx, message, text, delivery_guard=delivery_guard):
+            if speech.reply(ctx, message, text, delivery_guard=delivery_guard, speak=speak):
                 return True
         except TTSError as error:
             ctx.logger.warning("语音合成失败，回退文字：%s", error)

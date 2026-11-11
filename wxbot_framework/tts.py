@@ -1,4 +1,4 @@
-"""Fish Audio 的音色查询和 WAV 合成；密钥与服务响应不写入日志。"""
+"""Fish Audio 与 Breeze Blue 的音色查询和 WAV 合成；密钥与服务响应不写入日志。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,7 +15,12 @@ import urllib.request
 import wave
 
 MAX_AUDIO_BYTES = 20 * 1024 * 1024
-VOICE_ID = re.compile(r"^[0-9a-f]{32}$")
+FISH_VOICE_ID = re.compile(r"^[0-9a-f]{32}$")
+BREEZE_VOICE_ID = re.compile(r"^voc_[A-Za-z0-9]{6,40}$")
+# 库存两种服务的音色 ID。各自合成时仍按自己的格式再查一次。
+VOICE_ID = re.compile(r"^(?:[0-9a-f]{32}|voc_[A-Za-z0-9]{6,40})$")
+FISH_MODELS = ("s2.1-pro-free", "s2.1-pro", "s2-pro", "s1", "drama-3")
+BREEZE_MODELS = ("breeze-tts-2", "breeze-tts-2-multilingual")
 
 
 class TTSError(RuntimeError):
@@ -43,7 +48,7 @@ def _voice(item, *, public=False):
     identifier, name = item.get('_id'), item.get('title')
     if (item.get('type') != 'tts' or item.get('state') != 'trained' or item.get('dmca_taken_down') or
             (public and item.get('visibility') != 'public') or
-            not isinstance(identifier, str) or not VOICE_ID.fullmatch(identifier) or
+            not isinstance(identifier, str) or not FISH_VOICE_ID.fullmatch(identifier) or
             not isinstance(name, str) or not name.strip() or len(name) > 128 or
             any(ord(ch) < 32 or ord(ch) == 127 for ch in name)):
         return None
@@ -123,7 +128,7 @@ class FishTTS:
             raise TTSError("语音接口地址必须是无凭据的 HTTPS 地址")
         if not isinstance(key, str) or not key.strip() or any(not 33 <= ord(ch) <= 126 for ch in key):
             raise TTSError("请在 tts_config.json 填写有效 api_key")
-        if model not in ('s2.1-pro-free', 's2.1-pro', 's2-pro', 's1', 'drama-3'):
+        if model not in FISH_MODELS:
             raise TTSError("语音 model 不在已支持的 Fish 模型列表中")
         if not isinstance(default, str) or len(default) > 128 or any(ord(ch) < 32 for ch in default):
             raise TTSError("默认音色名称或 ID 无效")
@@ -132,6 +137,9 @@ class FishTTS:
         if type(size) is not int or not 20 <= size <= 180:
             raise TTSError("max_chars_per_clip 应为 20–180 的整数")
         return cls(base.rstrip('/'), key.strip(), model, default.strip(), timeout, size)
+
+    def accepts(self, value):
+        return isinstance(value, str) and FISH_VOICE_ID.fullmatch(value) is not None
 
     def _request(self, path, *, payload=None, limit):
         headers = {'Authorization': 'Bearer ' + self.api_key, 'User-Agent': 'helper-fish-tts'}
@@ -204,7 +212,7 @@ class FishTTS:
             raise TTSError('Fish Audio 公开音色列表格式不正确') from None
 
     def public_voice(self, identifier):
-        if not isinstance(identifier, str) or not VOICE_ID.fullmatch(identifier):
+        if not self.accepts(identifier):
             raise TTSError('公开音色 ID 无效')
         raw = self._request('/model/' + identifier, limit=2 * 1024 * 1024)
         try:
@@ -218,8 +226,165 @@ class FishTTS:
     def synthesize(self, text, voice_id):
         if not isinstance(text, str) or not text.strip() or len(text) > self.max_chars_per_clip or '\0' in text:
             raise TTSError("合成文本为空或超过单条长度限制")
-        if not isinstance(voice_id, str) or not VOICE_ID.fullmatch(voice_id):
+        if not self.accepts(voice_id):
             raise TTSError("合成音色 ID 无效")
         data = self._request('/v1/tts', payload={'text': text, 'reference_id': voice_id,
             'format': 'wav', 'sample_rate': 24000}, limit=MAX_AUDIO_BYTES)
         return normalize_wav(data)
+
+
+def _breeze_voice(item):
+    if not isinstance(item, dict):
+        return None
+    identifier, name = item.get('voice_id'), item.get('name')
+    if (not isinstance(identifier, str) or not BREEZE_VOICE_ID.fullmatch(identifier) or
+            not isinstance(name, str) or not name.strip() or len(name) > 128 or
+            any(ord(ch) < 32 or ord(ch) == 127 for ch in name)):
+        return None
+    return Voice(identifier, name.strip())
+
+
+@dataclass(frozen=True)
+class BreezeTTS:
+    """Breeze Blue 云端合成。文档：https://docs.breezeblue.ai/api-reference/text-to-speech/convert-text-to-speech"""
+
+    base_url: str
+    api_key: str = field(repr=False)
+    model: str = 'breeze-tts-2'
+    default_voice: str = ''
+    timeout_seconds: float = 45
+    max_chars_per_clip: int = 160
+
+    @classmethod
+    def from_options(cls, data):
+        if not isinstance(data, dict):
+            raise TTSError("语音配置必须是 JSON 对象")
+        base = data.get('base_url', 'https://api.breeze.blue')
+        key = data.get('api_key')
+        model = data.get('model', 'breeze-tts-2')
+        default = data.get('default_voice', '')
+        timeout = data.get('timeout_seconds', 45)
+        size = data.get('max_chars_per_clip', 160)
+        if not isinstance(base, str):
+            raise TTSError("语音接口地址无效")
+        parsed = urllib.parse.urlsplit(base)
+        if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise TTSError("语音接口地址必须是无凭据的 HTTPS 地址")
+        if not isinstance(key, str) or not key.strip() or any(not 33 <= ord(ch) <= 126 for ch in key):
+            raise TTSError("请在 tts_config.json 填写有效 api_key")
+        if model not in BREEZE_MODELS:
+            raise TTSError("语音 model 不在已支持的 Breeze 模型列表中")
+        if not isinstance(default, str) or len(default) > 128 or any(ord(ch) < 32 for ch in default):
+            raise TTSError("默认音色名称或 ID 无效")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 1 <= timeout <= 120:
+            raise TTSError("语音 timeout_seconds 应为 1–120 秒")
+        if type(size) is not int or not 20 <= size <= 180:
+            raise TTSError("max_chars_per_clip 应为 20–180 的整数")
+        return cls(base.rstrip('/'), key.strip(), model, default.strip(), timeout, size)
+
+    def accepts(self, value):
+        return isinstance(value, str) and BREEZE_VOICE_ID.fullmatch(value) is not None
+
+    def _request(self, path, *, payload=None, limit):
+        headers = {'xi-api-key': self.api_key, 'User-Agent': 'helper-breeze-tts'}
+        body = None
+        if payload is not None:
+            headers['Content-Type'] = 'application/json'
+            body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        request = urllib.request.Request(self.base_url + path, data=body, headers=headers)
+        try:
+            with urllib.request.build_opener(_NoRedirect()).open(request, timeout=self.timeout_seconds) as response:
+                data = response.read(limit + 1)
+        except urllib.error.HTTPError as error:
+            raise TTSError(f"Breeze Blue 请求失败（HTTP {error.code}）") from None
+        except (OSError, TimeoutError, urllib.error.URLError, http.client.HTTPException):
+            raise TTSError("Breeze Blue 连接失败或超时") from None
+        if len(data) > limit:
+            raise TTSError("Breeze Blue 响应超过大小限制")
+        return data
+
+    def _page(self, *, page, page_size, voice_type, keyword='', language=None):
+        query = {'voice_type': voice_type, 'page': page, 'page_size': page_size}
+        if language:
+            query['language_code'] = language
+        if keyword.strip():
+            query['search'] = keyword.strip()
+        raw = self._request('/v1/voices?' + urllib.parse.urlencode(query), limit=2 * 1024 * 1024)
+        try:
+            body = json.loads(raw)
+            items = body['voices']
+            if not isinstance(items, list):
+                raise ValueError()
+            voices = {}
+            for item in items:
+                voice = _breeze_voice(item)
+                if voice is not None:
+                    voices[voice.id] = voice
+            more = body.get('has_more')
+            return VoicePage(tuple(voices.values()), page, page_size, more is True)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise TTSError('Breeze Blue 音色列表格式不正确') from None
+
+    def voices(self):
+        result = {}
+        for page in range(1, 21):
+            batch = self._page(page=page, page_size=100, voice_type='personal')
+            result.update((voice.id, voice) for voice in batch.voices)
+            if not batch.has_more:
+                return tuple(sorted(result.values(), key=lambda voice: (voice.name.casefold(), voice.id)))
+        raise TTSError("音色数量超过当前查询预算，请缩小工作区音色范围")
+
+    def public_voices(self, *, page=1, keyword='', page_size=10, all_languages=False):
+        if type(page) is not int or not 1 <= page <= 1000:
+            raise TTSError('音色页码应为 1–1000 的整数')
+        if type(page_size) is not int or not 1 <= page_size <= 100:
+            raise TTSError('音色分页大小应为 1–100 的整数')
+        if type(all_languages) is not bool:
+            raise TTSError('音色语言范围应为布尔值')
+        if (not isinstance(keyword, str) or len(keyword) > 128 or
+                any(ord(ch) < 32 or ord(ch) == 127 for ch in keyword)):
+            raise TTSError('音色搜索词应为最多 128 字符的单行文字')
+        return self._page(page=page, page_size=page_size, voice_type='default', keyword=keyword,
+                          language=None if all_languages else 'zh')
+
+    def public_voice(self, identifier):
+        if not self.accepts(identifier):
+            raise TTSError('公开音色 ID 无效')
+        raw = self._request('/v1/voices/' + urllib.parse.quote(identifier), limit=2 * 1024 * 1024)
+        try:
+            voice = _breeze_voice(json.loads(raw))
+        except (ValueError, TypeError):
+            voice = None
+        if voice is None or voice.id != identifier:
+            raise TTSError('该音色不可用或已下架')
+        return voice
+
+    def synthesize(self, text, voice_id):
+        if not isinstance(text, str) or not text.strip() or len(text) > self.max_chars_per_clip or '\0' in text:
+            raise TTSError("合成文本为空或超过单条长度限制")
+        if not self.accepts(voice_id):
+            raise TTSError("合成音色 ID 无效")
+        path = '/v1/text-to-speech/' + urllib.parse.quote(voice_id) + '?' + urllib.parse.urlencode(
+            {'output_format': 'wav_24000', 'delivery': 'sync'})
+        data = self._request(path, payload={'text': text, 'model_id': self.model}, limit=MAX_AUDIO_BYTES)
+        return normalize_wav(data)
+
+
+def client_from_options(data):
+    """没写 provider 的旧配置继续用 Fish Audio。"""
+    if not isinstance(data, dict):
+        raise TTSError("语音配置必须是 JSON 对象")
+    provider = data.get('provider', 'fish')
+    if provider == 'fish':
+        return FishTTS.from_options(data)
+    if provider == 'breeze':
+        return BreezeTTS.from_options(data)
+    raise TTSError("语音 provider 应为 fish 或 breeze")
+
+
+def open_tts(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        raise TTSError("请先填写 tts_config.json 语音配置") from None
+    return client_from_options(data)
