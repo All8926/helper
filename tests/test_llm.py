@@ -47,6 +47,12 @@ class LLMTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(call.call_args.kwargs["timeout"], 20)
 
+    def test_v4_flash_also_defaults_to_no_thinking(self):
+        client = LLMClient({**self.options, "model": "deepseek-v4-flash"})
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response("{}")) as call:
+            client.complete_json("JSON", "测试")
+        self.assertEqual(json.loads(call.call_args.args[0].data)["thinking"], {"type": "disabled"})
+
     def test_compatible_gateway_preserves_version_path_without_vendor_parameters(self):
         self.client = LLMClient({**self.options, "base_url": "https://gateway.example.test/v1/", "model": "custom-model"})
         with patch("wxbot_framework.llm.urlopen", return_value=self.response('{"reply":"你好"}')) as call:

@@ -145,6 +145,9 @@ class TTSTests(unittest.TestCase):
         self.assertIn('/v1/text-to-speech/voc_xeh3w54cqvnp', request.call_args.args[0])
         self.assertIn('wav_24000', request.call_args.args[0])
         self.assertNotIn(client.api_key, repr(client))
+        rooted = BreezeTTS.from_options({"api_key": "placeholder", "base_url": "https://api.breeze.blue/v1/voices",
+                                         "model": "breeze-tts-2"})
+        self.assertEqual(rooted.base_url, "https://api.breeze.blue")
 
 
 if __name__ == '__main__':

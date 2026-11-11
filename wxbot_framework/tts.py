@@ -277,6 +277,12 @@ class BreezeTTS:
         size = data.get('max_chars_per_clip', 160)
         if not isinstance(base, str):
             raise TTSError("语音接口地址无效")
+        # 管理台里有人会把音色列表地址填进来。合成路径会自己补 /v1，这里先收回根地址。
+        base = base.rstrip("/")
+        for suffix in ("/v1/voices", "/v1/text-to-speech", "/v1"):
+            if base.endswith(suffix):
+                base = base[:-len(suffix)]
+                break
         parsed = urllib.parse.urlsplit(base)
         if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise TTSError("语音接口地址必须是无凭据的 HTTPS 地址")

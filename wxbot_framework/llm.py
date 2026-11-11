@@ -116,7 +116,7 @@ class LLMClient:
             payload["response_format"] = {"type": "json_object"}
         # 保留官方 DeepSeek 旧版的非思考行为；兼容网关不携带专属参数。
         # 用户显式指定的思考设置始终优先，旧的 reasoner 模型也不强制关闭。
-        if (self._deepseek_official and self.model in ("deepseek-flash", "deepseek-v4-pro", "deepseek-chat")
+        if (self._deepseek_official and self.model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat")
                 and not {"thinking", "reasoning_effort"}.intersection(self.extra_body)):
             payload["thinking"] = {"type": "disabled"}
         allow_fenced = not self.json_mode
