@@ -4,11 +4,15 @@ import unittest
 from datetime import timedelta
 from unittest.mock import Mock
 
+from PIL import Image
+
 import test_chat_summary as daily
 from plugins.mention_chat import Plugin
 from wxbot_framework import proactive as pro
+from wxbot_framework.llm import LLMError
 from wxbot_framework.room_behavior import BehaviorError, normalize_room_setting
 from wxbot_framework.sdk import Message
+from wxbot_framework.vision import vision_data_url
 
 ROOM, CAT, ROBOT, OTHER = daily.ROOM, daily.CAT, daily.ROBOT, daily.OTHER
 
@@ -279,3 +283,105 @@ class PluginTests(unittest.TestCase):
         self.store.record(self.message("好啊去哪座山", sender=OTHER, sequence=2))
         self.plugin._watch_once(now=1000)
         self.assertEqual(self.judged, [])
+
+    def _png(self, name, color):
+        path = self.root / name
+        Image.new("RGB", (4, 4), color).save(path)
+        return path
+
+    def _picture(self, path, sender=CAT, identifier="88", status="ready"):
+        self.plugin.on_message(Message("", ROOM, sender_id=sender, is_group=True, session_id="test",
+            sequence=1, type=3, data={"image_status": status, "image_path": str(path),
+                                      "native_message_id": identifier}), self.ctx)
+
+    def _capture(self, provider):
+        self.ctx._llm.complete_json = provider
+
+    def test_mention_sends_only_that_persons_recent_image(self):
+        self.start()
+        seen = []
+
+        def provider(system, user, image=None):
+            seen.append(image)
+            if "to_bot" in system:
+                return {"to_bot": True, "reply": "接着说。"}
+            return {"reply": "看到了。"}
+
+        self._capture(provider)
+        red, blue = self._png("red.png", "red"), self._png("blue.png", "blue")
+        self._picture(blue, sender=OTHER, identifier="81")
+        self.at("看别人的图", 2)
+        self.assertIsNone(seen[-1])
+        self._picture(red, status="failed", identifier="82")
+        self.at("失败的图", 4)
+        self.assertIsNone(seen[-1])
+        self._picture(red, identifier="83")
+        self.at("这是什么", 6)
+        self.assertEqual(seen[-1], vision_data_url(red))
+        self.say("那左边是什么意思", 7)
+        self.assertIsNone(seen[-1])
+
+    def test_quoted_image_wins_and_a_missing_quote_does_not_substitute(self):
+        self.start(activity=0)
+        seen = []
+
+        def provider(system, user, image=None):
+            seen.append((image, "附带一张图片" in system, '"image": true' in user))
+            return {"reply": "看到了。"}
+
+        self._capture(provider)
+        red, blue = self._png("red.png", "red"), self._png("blue.png", "blue")
+        self._picture(red, identifier="83")
+        self._picture(blue, sender=OTHER, identifier="81")
+        quiet = Message("看看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=9, type=49,
+                        data={"app_type": 57, "quoted_message_id": "81",
+                              "quoted_message": {"author": "别人", "kind": "image", "text": "[图片]",
+                                                 "available": True, "truncated": False}})
+        self.store.record(quiet)
+        self.plugin.on_message(quiet, self.ctx)
+        self.assertEqual(seen, [])
+        asked = Message("看看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=10, type=49,
+                        data={"app_type": 57, "is_at_self": True, "at_members": (ROBOT,), "quoted_message_id": "81",
+                              "quoted_message": {"author": "别人", "kind": "image", "text": "[图片]",
+                                                 "available": True, "truncated": False}})
+        self.store.record(asked)
+        self.plugin.on_message(asked, self.ctx)
+        self.assertEqual(seen[-1], (vision_data_url(blue), True, True))
+        missing = Message("再看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=11, type=49,
+                          data={"app_type": 57, "is_at_self": True, "at_members": (ROBOT,), "quoted_message_id": "404",
+                                "quoted_message": {"author": "别人", "kind": "image", "text": "[图片]",
+                                                   "available": True, "truncated": False}})
+        self.store.record(missing)
+        self.plugin.on_message(missing, self.ctx)
+        self.assertEqual(seen[-1], (None, False, False))
+
+    def test_rejected_image_falls_back_to_text_and_other_errors_do_not(self):
+        self.start(activity=0)
+        path = self._png("red.png", "red")
+        calls = []
+
+        def reject(system, user, image=None):
+            calls.append(image)
+            if image:
+                raise LLMError("大模型接口 HTTP 400；请核对密钥、余额和模型配置", status=400)
+            return {"reply": "只看文字。"}
+
+        self._capture(reject)
+        self._picture(path, identifier="83")
+        self.at("这是什么", 2)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(str(calls[0]).startswith("data:image/png;base64,"))
+        self.assertIsNone(calls[1])
+        self.assertIn("只看文字。", self.backend.sent[-1][1])
+
+        calls.clear()
+        self.backend.sent.clear()
+
+        def denied(system, user, image=None):
+            calls.append(image)
+            raise LLMError("大模型接口 HTTP 401；请核对密钥、余额和模型配置", status=401)
+
+        self._capture(denied)
+        self.at("再看一次", 3)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("暂时无法回复", self.backend.sent[-1][1])

@@ -56,8 +56,12 @@ class QuoteParserTests(unittest.TestCase):
                 value = parse_quote(quote_xml(content=secret, kind=kind))
                 self.assertEqual(value.reference.text, expected)
                 self.assertTrue(value.reference.available)
-                self.assertNotIn('fixture-private-key', json.dumps(value.public()))
-                self.assertNotIn('private.invalid', json.dumps(value.public()))
+                self.assertEqual(value.reference.message_id, '1234567890123456789' if kind == 3 else '')
+                published = json.dumps(value.public())
+                self.assertNotIn('fixture-private-key', published)
+                self.assertNotIn('private.invalid', published)
+                self.assertNotIn('1234567890123456789', published)
+                self.assertNotIn('svrid', published)
 
     def test_file_link_and_nested_quote_use_labels_and_titles_without_urls(self):
         for subtype, kind in ((5, 'link'), (6, 'file')):
@@ -229,6 +233,13 @@ class NativeQuoteTests(unittest.TestCase):
         buffer.append(message)
         self.assertEqual(buffer.tail()['rows'][0]['content'], question + '\n引用 被引用者：' + original)
         self.service._file_receiver.submit.assert_not_called()
+
+    def test_image_quote_keeps_server_id_for_local_lookup_only(self):
+        data = self.receive(content=quote_xml(content='<msg/>', kind=3))
+        self.assertEqual(data['quoted_message_id'], '1234567890123456789')
+        published = json.dumps(data['quoted_message'])
+        self.assertNotIn('svrid', published)
+        self.assertNotIn('1234567890123456789', published)
 
     def test_regular_file_still_uses_the_attachment_receiver(self):
         data = self.receive(content='<msg><appmsg><type>6</type></appmsg></msg>')

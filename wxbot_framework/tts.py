@@ -19,6 +19,16 @@ FISH_VOICE_ID = re.compile(r"^[0-9a-f]{32}$")
 BREEZE_VOICE_ID = re.compile(r"^voc_[A-Za-z0-9]{6,40}$")
 # 库存两种服务的音色 ID。各自合成时仍按自己的格式再查一次。
 VOICE_ID = re.compile(r"^(?:[0-9a-f]{32}|voc_[A-Za-z0-9]{6,40})$")
+
+
+def normalize_voice_id(value):
+    """Fish 的 32 位 ID 忽略大小写。名称原样返回，交给调用方判断。"""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if re.fullmatch(r"[0-9A-Fa-f]{32}", text):
+        return text.lower()
+    return text
 FISH_MODELS = ("s2.1-pro-free", "s2.1-pro", "s2-pro", "s1", "drama-3")
 BREEZE_MODELS = ("breeze-tts-2", "breeze-tts-2-multilingual")
 

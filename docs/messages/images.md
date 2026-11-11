@@ -4,7 +4,7 @@
 
 使用 `native_text` 后端时，收到允许会话的普通图片会通过当前微信的 CDN 下载任务保存到本地。`bot_config.json` 可设置 `"image_directory": ".runtime/images"`；相对路径以项目目录为起点，目录下再按微信账号隔离。未配置时使用该默认值。`chat_allowlist` 同时控制图片下载和插件分发，空列表允许所有会话。
 
-收到图片后日志显示状态和文件路径。插件中 `message.type == 3` 表示图片，`message.text` 为空；`message.data["image_status"]` 为 `ready` 时，`message.image_path` 指向已保存的图片。下载失败时状态为 `failed`，路径为空，原因在 `message.data["image_error"]` 中。`message.data["image_quality"]` 区分 `standard`（普通尺寸）、`original`（使用消息提供的原图引用）和 `thumbnail`（消息仅提供缩略图引用）。普通文本的类型为 `1`。图片不会进入文字聊天记录或大模型的文本上下文。
+收到图片后日志显示状态和文件路径。插件中 `message.type == 3` 表示图片，`message.text` 为空；`message.data["image_status"]` 为 `ready` 时，`message.image_path` 指向已保存的图片。下载失败时状态为 `failed`，路径为空，原因在 `message.data["image_error"]` 中。`message.data["image_quality"]` 区分 `standard`（普通尺寸）、`original`（使用消息提供的原图引用）和 `thumbnail`（消息仅提供缩略图引用）。普通文本的类型为 `1`。图片不会进入文字聊天记录。艾特对话在点名时可以单独把一张已下载图片交给模型，见[艾特机器人对话](../guide/features.md#艾特机器人对话)。
 
 已有插件默认只接收文本。需要处理图片的插件在 `plugin.json` 中声明消息类型和能力，例如：
 

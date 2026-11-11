@@ -496,6 +496,9 @@ class NativeTextService(NativeFileHelperService):
                 if quoted is not None:
                     # 引用与原提问分别保留；无需文件下载，不把 XML 交给模型。
                     data.update(quoted.public(), msg=quoted.text, content=quoted.text, raw_content='')
+                    # 编号只用于对上本机已下载的图，不放进引用摘要。
+                    if quoted.reference.message_id:
+                        data['quoted_message_id'] = quoted.reference.message_id
                     if data["is_self"] and any(chat == data["chat_id"] and text == quoted.text and
                                                time.monotonic() - sent_at < 120
                                                for chat, text, sent_at in tuple(self._sent_quotes)):

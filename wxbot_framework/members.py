@@ -687,16 +687,32 @@ class MemberStore:
                                    "mode": row["mode"] if row["mode"] in ("always", "auto") else "always"}
         return result
 
-    def set_voice_mode(self, room, mode):
-        """关闭、始终语音或自动。后两种要已经在群里选过音色。"""
+    def assign_room_voice(self, room, mode, voice_id=""):
+        """按页面或指令设置本群音色和语音方式。voice_id 为空时沿用本群已经保存的 ID。"""
+        from .tts import VOICE_ID, normalize_voice_id
+        supplied = normalize_voice_id(voice_id)
+        if supplied and not VOICE_ID.fullmatch(supplied):
+            raise MemberError("音色 ID 无效。Fish 是 32 位十六进制，Breeze 以 voc_ 开头")
+        current = self.voice_selection(room)
         if mode == "off":
+            if supplied:
+                name = current.name if current.voice_id == supplied and current.name else supplied
+                kept = current.mode if current.voice_id else "always"
+                self.set_voice(room, supplied, name, enabled=True, mode=kept)
             return self.set_voice(room, "", "", enabled=False)
         if mode not in ("always", "auto"):
             raise MemberError("语音回复应为关闭、始终语音或自动")
-        current = self.voice_selection(room)
-        if not current.voice_id:
-            raise MemberError("请先在群里用 /音色 选择音色，再切换始终语音或自动")
-        return self.set_voice(room, current.voice_id, current.name, enabled=True, mode=mode)
+        chosen = supplied or current.voice_id
+        if not chosen:
+            raise MemberError("请填写本群音色 ID，或在「模型与语音」中填写默认音色 ID")
+        if not VOICE_ID.fullmatch(chosen):
+            raise MemberError("音色 ID 无效。Fish 是 32 位十六进制，Breeze 以 voc_ 开头")
+        name = current.name if current.voice_id == chosen and current.name else chosen
+        return self.set_voice(room, chosen, name, enabled=True, mode=mode)
+
+    def set_voice_mode(self, room, mode):
+        """关闭、始终语音或自动。后两种沿用本群已经保存的音色 ID。"""
+        return self.assign_room_voice(room, mode)
 
     @contextmanager
     def voice_delivery_guard(self, state):

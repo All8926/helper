@@ -58,6 +58,17 @@ def _xml(value):
     return root
 
 
+def _server_id(node):
+    """引用图片的微信消息编号。无效时留空，不把编号写进可见摘要。"""
+    raw = _field(node, 'svrid').strip()
+    if not raw:
+        return ''
+    try:
+        return str(validate_quote_id(raw))
+    except QuoteError:
+        return ''
+
+
 def _field(node, name):
     children = node.findall(name)
     if len(children) > 1:
@@ -72,6 +83,8 @@ class QuotedContent:
     text: str = '[原消息未提供]'
     available: bool = False
     truncated: bool = False
+    # 只在进程内对上已下载图片，不进入 public()，也不交给模型。
+    message_id: str = ''
 
     def public(self):
         # 不带原始 XML、CDN 地址、凭据、路径或引用作者的内部 ID。
@@ -97,7 +110,8 @@ def _reference(node, depth):
         return QuotedContent(author, 'text', text or '[原消息未提供]', bool(text), len(raw) > MAX_TEXT)
     if kind.isascii() and kind.isdecimal() and len(kind) < 8 and int(kind) in _LABELS:
         media, label = _LABELS[int(kind)]
-        return QuotedContent(author, media, label, True)
+        identifier = _server_id(node) if media == 'image' else ''
+        return QuotedContent(author, media, label, True, message_id=identifier)
     if kind == '49' and raw.strip() and depth < 2:
         try:
             inner = _xml(raw)

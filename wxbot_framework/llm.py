@@ -23,7 +23,9 @@ def is_worldguide_url(url):
 
 
 class LLMError(RuntimeError):
-    pass
+    def __init__(self, message, *, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 class LLMClient:
@@ -92,12 +94,23 @@ class LLMClient:
     def from_file(cls, path):
         return cls(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
-    def complete_json(self, system, user):
+    def complete_json(self, system, user, image=None):
         json_instruction = "\n\n请只返回一个有效的 JSON 对象，不要使用 Markdown 代码围栏或附加说明。"
         if not self.json_mode:
             system += json_instruction
+        content = user
+        # 只接受本机生成的 data URL，不让接口去拉取外部图片地址。
+        if image is not None:
+            if not isinstance(image, str) or len(image) > 6 * 1024 * 1024:
+                raise LLMError("图片内容无效或过大")
+            header, separator, payload_text = image.partition(";base64,")
+            if separator != ";base64," or header not in (
+                    "data:image/jpeg", "data:image/png", "data:image/gif", "data:image/webp") or not payload_text:
+                raise LLMError("图片内容无效或过大")
+            content = [{"type": "text", "text": user},
+                       {"type": "image_url", "image_url": {"url": image}}]
         payload = {"model": self.model, "messages": [{"role": "system", "content": system},
-                                                       {"role": "user", "content": user}],
+                                                       {"role": "user", "content": content}],
                    self.token_limit_parameter: self.max_tokens, "stream": False, **self.extra_body}
         if self.json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -107,6 +120,8 @@ class LLMClient:
                 and not {"thinking", "reasoning_effort"}.intersection(self.extra_body)):
             payload["thinking"] = {"type": "disabled"}
         allow_fenced = not self.json_mode
+        # 看图要上传图片，短超时很容易失败；不超过配置允许的 60 秒。
+        wait = min(60, max(self.timeout, 45)) if image is not None else self.timeout
         headers = {"Content-Type": "application/json"}
         if self._worldguide:
             # The gateway rejects urllib's default User-Agent.
@@ -120,7 +135,7 @@ class LLMClient:
                                   headers=headers, method="POST")
                 if self._worldguide:
                     request.add_unredirected_header("Authorization", "Bearer " + self._api_key)
-                with urlopen(request, timeout=self.timeout) as response:
+                with urlopen(request, timeout=wait) as response:
                     raw = response.read(1024 * 1024 + 1)
                 if len(raw) > 1024 * 1024:
                     raise LLMError("大模型响应过大")
@@ -160,8 +175,8 @@ class LLMClient:
         except HTTPError as error:
             # 不输出响应正文或请求头，避免服务器错误回显密钥。
             if self._worldguide and error.code == 429:
-                raise LLMError("WorldGuide 请求受限（HTTP 429），请稍后再试") from None
-            raise LLMError(f"大模型接口 HTTP {error.code}；请核对密钥、余额和模型配置") from None
+                raise LLMError("WorldGuide 请求受限（HTTP 429），请稍后再试", status=429) from None
+            raise LLMError(f"大模型接口 HTTP {error.code}；请核对密钥、余额和模型配置", status=error.code) from None
         except (URLError, TimeoutError, OSError):
             raise LLMError("大模型连接失败或超时，请稍后再试") from None
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):

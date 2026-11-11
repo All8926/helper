@@ -448,15 +448,15 @@ class PanelController:
                 raise PanelError('机器人正在停止，请稍后重试', 409)
             app = self.app
         try:
-            if 'voice_mode' in data and data.get('voice_mode') != 'off':
-                self._require_saved_voice(data.get('room'))
+            if 'voice_mode' in data:
+                self._check_voice_choice(data.get('room'), data.get('voice_mode'), data.get('voice_id'))
             members = getattr(app, 'members', None) if app is not None else None
             if members is not None:
                 members.update_behavior(data)
             else:
                 self._write_behavior_file(data)
             if 'voice_mode' in data:
-                self._apply_voice_mode(data.get('room'), data.get('voice_mode'))
+                self._apply_voice_mode(data.get('room'), data.get('voice_mode'), data.get('voice_id'))
         except (BehaviorError, MemberError, ValueError) as error:
             raise PanelError(str(error)) from None
         return self.configuration()
@@ -490,21 +490,50 @@ class PanelController:
             if owned:
                 store.close()
 
-    def _require_saved_voice(self, room):
+    def _default_voice(self):
+        path = self._paths(self.store.load()).get('tts')
+        if path is None or not path.exists():
+            return ''
+        try:
+            value = read_json(path).get('default_voice') or ''
+        except (OSError, ValueError):
+            return ''
+        return value.strip() if isinstance(value, str) else ''
+
+    def _voice_candidate(self, room, explicit):
+        """页面填写的 ID 优先，其次本群已保存的，最后是语音配置里的默认音色 ID。"""
+        from .tts import normalize_voice_id
+        supplied = normalize_voice_id(explicit)
+        if supplied:
+            return supplied
         store, owned = self._open_members()
         try:
-            if store is None or not store.voice_selection(room).voice_id:
-                raise MemberError('请先在群里用 /音色 选择音色，再切换始终语音或自动')
+            current = store.voice_selection(room).voice_id if store is not None else ''
         finally:
             if owned and store is not None:
                 store.close()
+        return current or normalize_voice_id(self._default_voice())
 
-    def _apply_voice_mode(self, room, mode):
+    def _check_voice_choice(self, room, mode, explicit):
+        from .members import MemberError
+        from .tts import VOICE_ID, normalize_voice_id
+        supplied = normalize_voice_id(explicit)
+        if supplied and not VOICE_ID.fullmatch(supplied):
+            raise MemberError('音色 ID 无效。Fish 是 32 位十六进制，Breeze 以 voc_ 开头')
+        if mode == 'off':
+            return
+        chosen = self._voice_candidate(room, supplied)
+        if not chosen or not VOICE_ID.fullmatch(chosen):
+            raise MemberError('请填写本群音色 ID，或在「模型与语音」中填写默认音色 ID')
+
+    def _apply_voice_mode(self, room, mode, explicit=''):
+        from .members import MemberError
         store, owned = self._open_members()
         if store is None:
             raise MemberError('请先设置微信账号，才能保存各群的语音方式')
         try:
-            store.set_voice_mode(room, mode)
+            chosen = explicit if mode == 'off' else self._voice_candidate(room, explicit)
+            store.assign_room_voice(room, mode, chosen)
         finally:
             if owned:
                 store.close()

@@ -1,13 +1,18 @@
 """大模型协议和错误处理验证；使用假响应，不消耗实际 API。"""
+import base64
 import io
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
+from PIL import Image
+
 from wxbot_framework.llm import LLMClient, LLMError
+from wxbot_framework.vision import SeenImages, vision_data_url
 from plugins.idiom_chain.judge import IdiomJudge
 
 
@@ -271,3 +276,75 @@ class JudgeTests(unittest.TestCase):
         self.client.result = {"idiom": "假词"}
         with self.assertRaises(LLMError):
             self.judge.opening()
+
+
+class VisionRequestTests(unittest.TestCase):
+    def setUp(self):
+        self.client = LLMClient({"api_key": "dummy-test-key", "model": "deepseek-v4-flash", "timeout_seconds": 20})
+
+    def response(self, content):
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
+
+    def test_image_is_a_data_url_and_uses_a_longer_timeout(self):
+        image = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{"reply":"红色"}')) as call:
+            self.assertEqual(self.client.complete_json("只返回 JSON", "看这张图", image=image), {"reply": "红色"})
+        self.assertGreaterEqual(call.call_args.kwargs["timeout"], 45)
+        payload = json.loads(call.call_args.args[0].data)
+        self.assertEqual(payload["messages"][0]["content"], "只返回 JSON")
+        parts = payload["messages"][1]["content"]
+        self.assertEqual(parts[0], {"type": "text", "text": "看这张图"})
+        self.assertEqual(parts[1]["type"], "image_url")
+        self.assertEqual(parts[1]["image_url"]["url"], image)
+        self.assertNotIn(image, str(call.call_args.args[0].headers))
+
+    def test_remote_or_unknown_image_is_rejected_before_the_request(self):
+        for image in ("https://example.test/a.png", "data:image/bmp;base64,QQ==", "data:image/png;base64,"):
+            with self.subTest(image=image[:24]), patch("wxbot_framework.llm.urlopen") as call:
+                with self.assertRaises(LLMError) as caught:
+                    self.client.complete_json("JSON", "看图", image=image)
+                self.assertIsNone(caught.exception.status)
+                call.assert_not_called()
+
+    def test_http_400_keeps_status_and_hides_the_image(self):
+        image = "data:image/jpeg;base64," + ("A" * 40)
+        error = HTTPError("https://example.test", 400, image, {}, None)
+        with patch("wxbot_framework.llm.urlopen", side_effect=error):
+            with self.assertRaises(LLMError) as caught:
+                self.client.complete_json("JSON", "看图", image=image)
+        self.assertEqual(caught.exception.status, 400)
+        self.assertNotIn("AAAA", str(caught.exception))
+
+
+class SeenImageTests(unittest.TestCase):
+    def test_recent_image_expires_but_quoted_id_remains_until_evicted(self):
+        images = SeenImages(window=180, limit=1)
+        self.assertFalse(images.remember("room", "amy", 0, "zero.png"))
+        self.assertFalse(images.remember("room", "amy", True, "bool.png"))
+        self.assertTrue(images.remember("room", "amy", "11", "first.png"))
+        self.assertEqual(images.latest("room", "amy"), "first.png")
+        self.assertEqual(images.latest("room", "other"), "")
+        self.assertEqual(images.latest("room", "amy", now=time.monotonic() + 181), "")
+        self.assertEqual(images.by_id("11"), "first.png")
+        self.assertTrue(images.remember("room", "amy", "22", "second.png"))
+        self.assertEqual(images.by_id("11"), "")
+        self.assertEqual(images.by_id(22), "second.png")
+
+    def test_local_image_becomes_a_supported_data_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            small = root / "small.png"
+            wide = root / "wide.png"
+            bitmap = root / "plain.bmp"
+            Image.new("RGB", (8, 8), "red").save(small)
+            Image.new("RGB", (1400, 8), "blue").save(wide)
+            Image.new("RGB", (8, 8), "green").save(bitmap)
+            (root / "note.txt").write_bytes(b"not an image")
+            png = vision_data_url(small)
+            jpeg = vision_data_url(wide)
+            converted = vision_data_url(bitmap)
+            self.assertTrue(png.startswith("data:image/png;base64,"))
+            self.assertTrue(jpeg.startswith("data:image/jpeg;base64,"))
+            self.assertTrue(converted.startswith("data:image/jpeg;base64,"))
+            self.assertNotEqual(png, jpeg)
+            self.assertEqual(vision_data_url(root / "note.txt"), "")

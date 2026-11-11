@@ -138,7 +138,8 @@
             </div>
             <p class="group-name-hint">0 表示只在被艾特、叫别名或引用它的话时回复。1–10 决定机器人大约占群消息的份额：1 约 1%，5 约 5%，10 约 15%。每句话会按提问、求助、吵架、话题热度、没人接的时间打分，份额攒得多时门槛低，刚说过话或份额用完时门槛高。群里在聊、份额也够时，每隔「看群间隔」让模型看一眼要不要插话，0 表示不看。插话有人接，本群门槛慢慢降低；没人理会升高；有人嫌吵，1 小时内不主动开口。机器人刚回过的人不点名接着说，它也能认出来。</p>
             <label for="behavior-voice">语音回复<select id="behavior-voice"><option value="off">关闭（文字）</option><option value="always">始终语音</option><option value="auto">自动</option></select></label>
-            <p id="behavior-voice-hint" class="group-name-hint">始终语音和自动都要先在群里用 /音色 选好音色。自动会按内容决定念出来还是打字。</p>
+            <label for="behavior-voice-id">本群音色 ID<input id="behavior-voice-id" spellcheck="false" autocomplete="off" placeholder="留空则用模型与语音里的默认音色 ID"></label>
+            <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念，自动按内容决定。音色填 ID，留空时使用「模型与语音」里的默认音色 ID。也可以在群里用 /音色 名称 选择。</p>
             <label for="behavior-admins">管理员微信 ID</label>
             <textarea id="behavior-admins" rows="3" placeholder="每行一个 wxid" spellcheck="false" autocomplete="off"></textarea>
             <div class="member-pick-head">

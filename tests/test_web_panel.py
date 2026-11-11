@@ -520,9 +520,19 @@ class HTTPTests(PanelFixture):
         path.write_text(json.dumps(members), encoding='utf-8')
         store = MemberStore(path, 'wxid_test_robot')
         self.addCleanup(store.close)
-        with self.assertRaisesRegex(PanelError, '选择音色'):
+        with self.assertRaisesRegex(PanelError, '音色 ID'):
             self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto'})
         self.assertNotIn(room, read_json(path).get('room_settings') or {})
+        tts = read_json(self.root / 'tts_config.json')
+        tts['default_voice'] = 'b' * 32
+        (self.root / 'tts_config.json').write_text(json.dumps(tts), encoding='utf-8')
+        saved = self.controller.save_room_behavior({'room': room, 'setting': {'activity': 1}, 'voice_mode': 'always'})
+        self.assertEqual(saved['room_voices'][room]['voice_id'], 'b' * 32)
+        self.assertTrue(saved['room_voices'][room]['enabled'])
+        saved = self.controller.save_room_behavior(
+            {'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto', 'voice_id': 'A' * 32})
+        self.assertEqual(saved['room_voices'][room]['voice_id'], 'a' * 32)
+        self.assertEqual(saved['room_voices'][room]['mode'], 'auto')
         store.set_voice(room, 'a' * 32, '测试甲')
         saved = self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto'})
         self.assertEqual(saved['room_voices'][room]['mode'], 'auto')

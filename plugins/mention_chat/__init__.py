@@ -18,6 +18,7 @@ from wxbot_framework.sdk import Message
 from wxbot_framework.speech import deliver_model_reply
 from wxbot_framework.summary import CONTROL
 from wxbot_framework.text import own_group_command
+from wxbot_framework.vision import SeenImages, vision_data_url
 
 _REASON = {"mediate": "拉架", "question": "提问", "unanswered": "未接的问题",
            "join": "话题", "cold": "冷场", "glance": "看群"}
@@ -27,6 +28,7 @@ WATCH_SECONDS = 30
 class Plugin:
     def on_load(self, ctx):
         self.members = ctx.members
+        self.images = SeenImages()
         if not self.members.history_enabled:
             raise ValueError("艾特上下文对话需要 history_enabled: true")
         ctx.llm  # 启动时核对配置，不请求接口。
@@ -49,6 +51,9 @@ class Plugin:
             stop.set()
 
     def on_message(self, message, ctx):
+        if message.type == 3:
+            self._remember_image(message)
+            return
         if not self._group_text(message):
             return
         room, bot = message.chat_id, self.members.account
@@ -86,8 +91,12 @@ class Plugin:
         """艾特机器人、正文里出现本群别名、或引用机器人说过的话，都进入同一套回复。斜杠指令留给对应功能。"""
         if message.type == 49:
             quoted = reference(message)
-            return (quoted is not None and quoted.kind == "text" and bool(message.text.strip()) and
-                    self.members.bot_said(message.chat_id, quoted.text))
+            if (quoted is not None and quoted.kind == "text" and bool(message.text.strip()) and
+                    self.members.bot_said(message.chat_id, quoted.text)):
+                return True
+            # 引用文字仍只认机器人自己的话。引用图片时，艾特或别名也算点名。
+            if quoted is None or quoted.kind == "text":
+                return False
         mentioned = bool(message.data.get("is_at_self") and
                          self.members.account in message.data.get("at_members", ()))
         return mentioned or self.members.alias_mentioned(message.chat_id, message.text)
@@ -135,11 +144,49 @@ class Plugin:
         started = time.perf_counter()
         diary = self.members.recent_digests(message.chat_id)
         memory = self.members.facts_for(message.chat_id, message.sender_id)
-        reply, speak = Dialogue(ctx.llm_for(message, personality=personality)).reply(
-            snapshot, diary=diary, memory=memory, choose_voice=self._auto_voice(message.chat_id))
+        client = ctx.llm_for(message, personality=personality)
+        image = self._vision_image(message, ctx)
+        voice = self._auto_voice(message.chat_id)
+        try:
+            reply, speak = Dialogue(client).reply(
+                snapshot, diary=diary, memory=memory, choose_voice=voice, image=image)
+        except LLMError as error:
+            # 文本模型拒绝图片时，仍按原来的文字回复。
+            if not image or getattr(error, "status", None) != 400:
+                raise
+            ctx.logger.info("看图 | 群=%s | 模型未接受图片，改为只看文字", message.chat_id)
+            reply, speak = Dialogue(client).reply(
+                snapshot, diary=diary, memory=memory, choose_voice=voice)
         reply = personality_text(reply, personality.name)
         model_seconds = time.perf_counter() - started
         return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
+
+    def _remember_image(self, message):
+        """下载完成后记下群图片。没点名之前不调用模型。"""
+        if (not message.is_group or message.chat_id not in self.members.groups or message.is_self or
+                message.data.get("bot_generated") or message.data.get("image_status") != "ready"):
+            return
+        self.images.remember(message.chat_id, message.sender_id,
+                             message.data.get("native_message_id"), message.image_path)
+
+    def _vision_image(self, message, ctx):
+        """点名时附上引用到的图；没有引用图时，用这个人三分钟内刚发的一张。"""
+        quoted = reference(message)
+        if quoted is not None and quoted.kind == "image":
+            path = self.images.by_id(message.data.get("quoted_message_id"))
+            if not path:
+                ctx.logger.info("看图 | 群=%s | 引用的图片还没有本地文件", message.chat_id)
+                return None
+        else:
+            path = self.images.latest(message.chat_id, message.sender_id)
+            if not path:
+                return None
+        url = vision_data_url(path)
+        if not url:
+            ctx.logger.info("看图 | 群=%s | 图片未能读取，改为只看文字", message.chat_id)
+            return None
+        ctx.logger.info("看图 | 群=%s | 已附上图片", message.chat_id)
+        return url
 
     def _follow_up(self, message, ctx, snapshot, personality, delivery_guard):
         """模型判断不是在跟机器人说话时返回 None。"""

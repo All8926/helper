@@ -17,6 +17,7 @@ SHORT_SYSTEM = SYSTEM.replace("通常用 50–150 个汉字，内容自然具体
 _OUTPUT = '输出仅为 JSON 对象：{"reply":"给群友的回复"}。'
 _VOICE_OUTPUT = ('这句适合直接念出来（口语、短、没有链接、代码或一长串数字）时 voice 为 true，适合打字看时为 false。'
                  '输出仅为 JSON 对象：{"reply":"给群友的回复","voice":false}。')
+_IMAGE = "\n这次输入附带一张图片，就是当前消息要你看的那张。请结合图片回答，不要说自己看不见。"
 FOLLOW_UP = """这条消息没有艾特你，也没有叫你的名字。先判断它是不是在接着跟你说话：回应你刚才的话、追问你、或者用「你」直接对你说。
 在跟别人说话、只是群里闲聊、或者拿不准时，to_bot 为 false，reply 为空字符串。是在跟你说时 to_bot 为 true，reply 按上面的要求回应。
 输出仅为 JSON 对象：{"to_bot":true,"reply":"给群友的回复"}。"""
@@ -60,7 +61,7 @@ class Dialogue:
     def __init__(self, client):
         self.client = client
 
-    def reply(self, snapshot, *, diary=(), memory=(), follow_up=False, choose_voice=False):
+    def reply(self, snapshot, *, diary=(), memory=(), follow_up=False, choose_voice=False, image=None):
         """返回回复正文，以及自动模式下模型是否想用语音。follow_up 判断不是在跟机器人说时正文为空。"""
         transcript = [transcript_line(row, current=False) for row in working_messages(snapshot.messages)]
         transcript.append({"time": datetime.now(BEIJING).strftime("%H:%M:%S"),
@@ -71,9 +72,13 @@ class Dialogue:
             system = system.replace(_OUTPUT, _FOLLOW_UP_VOICE if choose_voice else FOLLOW_UP)
         elif choose_voice:
             system = system.replace(_OUTPUT, _VOICE_OUTPUT)
-        result = self.client.complete_json(system, json.dumps(
-            {"name": snapshot.speaker_name, "date": snapshot.day, "diary": public_diary(diary),
-             "memory": public_memory(memory), "transcript": transcript}, ensure_ascii=False))
+        body = {"name": snapshot.speaker_name, "date": snapshot.day, "diary": public_diary(diary),
+                "memory": public_memory(memory), "transcript": transcript}
+        if image:
+            system += _IMAGE
+            body["image"] = True
+        result = self.client.complete_json(system, json.dumps(body, ensure_ascii=False),
+                                           **({"image": image} if image else {}))
         if follow_up and (not isinstance(result, dict) or result.get("to_bot") is not True):
             return "", None
         reply = result.get("reply") if isinstance(result, dict) else None

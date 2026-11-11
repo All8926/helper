@@ -71,10 +71,13 @@ class PersonalityLLM:
         self.prompts = None if prompts is None else dict(prompts)
         self.guard = guard
 
-    def complete_json(self, system, user):
+    def complete_json(self, system, user, image=None):
         if not self.current():
             raise PersonalityExpired("人格已切换")
-        result = self.client.complete_json(system_with_personality(system, self.state, self.prompts, self.guard), user)
+        prepared = system_with_personality(system, self.state, self.prompts, self.guard)
+        # 没图时保持原来的两个参数，避免文字调用把空图片传下去。
+        result = (self.client.complete_json(prepared, user, image=image) if image else
+                  self.client.complete_json(prepared, user))
         if not self.current():
             raise PersonalityExpired("人格已切换")
         return result

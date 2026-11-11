@@ -315,6 +315,7 @@ function readBehaviorForm() {
     activity: contextNumber($('#behavior-activity').value, 0),
     glance_minutes: contextNumber($('#behavior-glance').value, 2),
     voice_mode: $('#behavior-voice').value,
+    voice_id: $('#behavior-voice-id').value.trim(),
     plugin_options: readNoticeOptions()};
 }
 function readNoticeOptions() {
@@ -379,10 +380,12 @@ function showBehavior(room) {
   const voice = config?.room_voices?.[room] || {};
   const voiceMode = saved.voice_mode || (!voice.voice_id || voice.enabled === false ? 'off' : (voice.mode === 'auto' ? 'auto' : 'always'));
   $('#behavior-voice').value = ['off', 'always', 'auto'].includes(voiceMode) ? voiceMode : 'off';
+  $('#behavior-voice-id').value = saved.voice_id != null ? saved.voice_id : (voice.voice_id || '');
   const voiceHint = $('#behavior-voice-hint');
-  if (voiceHint) voiceHint.textContent = voice.name
-    ? `当前音色：${voice.name}。自动会按内容决定念出来还是打字。`
-    : '还没选音色。先在群里发送 /音色 名称，再把这里改成始终语音或自动。';
+  const named = voice.name && voice.voice_id && voice.name !== voice.voice_id;
+  if (voiceHint) voiceHint.textContent = named
+    ? `当前音色：${voice.name}。ID 留空时，始终语音和自动会使用「模型与语音」里的默认音色 ID。`
+    : '填写音色 ID，或留空使用「模型与语音」里的默认音色 ID。也可以在群里用 /音色 名称 选择。';
   const notice = (saved.plugin_options || {}).group_notice || {};
   $('#behavior-welcome').value = notice.welcome_template || '';
   $('#behavior-leave').value = notice.leave_template || '';
@@ -519,7 +522,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-voice', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-voice', 'behavior-voice-id', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-member-search').oninput = () => {
   if ($('#behavior-member-search').value.trim()) membersExpanded = true;
@@ -544,8 +547,10 @@ $('#behavior-form').onsubmit = event => {
     if (!room) throw new Error('请先添加并保存支持的群聊');
     const setting = readBehaviorForm();
     const voiceMode = setting.voice_mode;
+    const voiceId = setting.voice_id;
     delete setting.voice_mode;
-    await api('room-behavior', {room, setting, voice_mode: voiceMode});
+    delete setting.voice_id;
+    await api('room-behavior', {room, setting, voice_mode: voiceMode, voice_id: voiceId});
     behaviorDirty = false;
     behaviorDraft.clear();
     await loadConfig();
