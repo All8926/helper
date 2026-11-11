@@ -312,6 +312,7 @@ function readBehaviorForm() {
     context_hours: contextNumber($('#behavior-hours').value, 6),
     context_limit: contextNumber($('#behavior-limit').value, 300),
     activity: contextNumber($('#behavior-activity').value, 0),
+    glance_minutes: contextNumber($('#behavior-glance').value, 2),
     plugin_options: readNoticeOptions()};
 }
 function readNoticeOptions() {
@@ -372,6 +373,7 @@ function showBehavior(room) {
   $('#behavior-hours').value = saved.context_hours || 6;
   $('#behavior-limit').value = saved.context_limit || 300;
   $('#behavior-activity').value = Number.isInteger(saved.activity) ? saved.activity : (saved.proactive_enabled === true ? 5 : 0);
+  $('#behavior-glance').value = Number.isInteger(saved.glance_minutes) ? saved.glance_minutes : 2;
   const notice = (saved.plugin_options || {}).group_notice || {};
   $('#behavior-welcome').value = notice.welcome_template || '';
   $('#behavior-leave').value = notice.leave_template || '';
@@ -508,7 +510,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-member-search').oninput = () => {
   if ($('#behavior-member-search').value.trim()) membersExpanded = true;

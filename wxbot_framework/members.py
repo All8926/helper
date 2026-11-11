@@ -236,6 +236,9 @@ class MemberStore:
                     account TEXT NOT NULL, room TEXT NOT NULL, sender_id TEXT NOT NULL,
                     facts TEXT NOT NULL, updated_at TEXT NOT NULL,
                     PRIMARY KEY(account,room,sender_id));
+                CREATE TABLE IF NOT EXISTS room_proactive (
+                    account TEXT NOT NULL, room TEXT NOT NULL, bias REAL NOT NULL,
+                    PRIMARY KEY(account,room));
                 INSERT OR IGNORE INTO room_members SELECT DISTINCT account,room,sender_id FROM messages;
             """)
             if "self_named" not in {row["name"] for row in db.execute("PRAGMA table_info(people)")}:
@@ -689,6 +692,32 @@ class MemberStore:
             return normalize_activity(setting.get("activity"), setting.get("proactive_enabled"))
         except BehaviorError:
             return 0
+
+    def room_glance_minutes(self, room):
+        """群里在聊时隔几分钟让模型看一眼，0 表示不看。"""
+        from .room_behavior import BehaviorError, DEFAULT_GLANCE_MINUTES, normalize_glance_minutes
+        setting = self.room_settings.get(room) or {}
+        try:
+            return normalize_glance_minutes(setting.get("glance_minutes"))
+        except BehaviorError:
+            return DEFAULT_GLANCE_MINUTES
+
+    def proactive_bias(self, room):
+        """本群主动插话门槛学到的修正，正数表示群友不太欢迎插话。重启后保留。"""
+        with self._lock:
+            row = self._connection().execute("SELECT bias FROM room_proactive WHERE account=? AND room=?",
+                                              (self.account, room)).fetchone()
+            return row[0] if row else 0.0
+
+    def shift_proactive_bias(self, room, delta, low, high):
+        """按群友反馈调整修正值，夹在 low 与 high 之间，返回调整后的值。"""
+        with self._lock, self._connection() as db:
+            row = db.execute("SELECT bias FROM room_proactive WHERE account=? AND room=?",
+                             (self.account, room)).fetchone()
+            value = round(min(max((row[0] if row else 0.0) + delta, low), high), 3)
+            db.execute("""INSERT INTO room_proactive VALUES(?,?,?)
+                ON CONFLICT(account,room) DO UPDATE SET bias=excluded.bias""", (self.account, room, value))
+            return value
 
     def bot_said(self, room, text, limit=50):
         """被引用的文字是不是机器人最近在本群说过的话。微信引用里不带作者 ID，只能比对正文。"""

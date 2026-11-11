@@ -132,8 +132,11 @@
               <label for="behavior-limit">上下文最多条数<input id="behavior-limit" type="number" min="1" max="2000" step="1" value="300"></label>
             </div>
             <p class="group-name-hint">这是读取上限。艾特或叫别名时，只把这段里最新的 24 条、合计不超过 2400 字送给模型。默认读取 6 小时、300 条。</p>
-            <label for="behavior-activity">活跃度（0–10）<input id="behavior-activity" type="number" min="0" max="10" step="1" value="0"></label>
-            <p class="group-name-hint">0 表示只在被艾特、叫别名或引用它的话时回复。1–10 越大越爱开口：1–2 只接悬着没人答的问题和自己的话题，3 起会回应提问、劝架，4 起会在冷场时接一句，6 起会加入大家正在聊的事。大于 0 时，机器人刚回过的人不点名接着说，它也能认出来。插话没人理，间隔会自动放宽；有人嫌它吵，1 小时内不主动开口。</p>
+            <div class="field-pair">
+              <label for="behavior-activity">活跃度（0–10）<input id="behavior-activity" type="number" min="0" max="10" step="1" value="0"></label>
+              <label for="behavior-glance">看群间隔（分钟）<input id="behavior-glance" type="number" min="0" max="60" step="1" value="2"></label>
+            </div>
+            <p class="group-name-hint">0 表示只在被艾特、叫别名或引用它的话时回复。1–10 决定机器人大约占群消息的份额：1 约 1%，5 约 5%，10 约 15%。每句话会按提问、求助、吵架、话题热度、没人接的时间打分，份额攒得多时门槛低，刚说过话或份额用完时门槛高。群里在聊、份额也够时，每隔「看群间隔」让模型看一眼要不要插话，0 表示不看。插话有人接，本群门槛慢慢降低；没人理会升高；有人嫌吵，1 小时内不主动开口。机器人刚回过的人不点名接着说，它也能认出来。</p>
             <label for="behavior-admins">管理员微信 ID</label>
             <textarea id="behavior-admins" rows="3" placeholder="每行一个 wxid" spellcheck="false" autocomplete="off"></textarea>
             <div class="member-pick-head">

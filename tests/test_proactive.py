@@ -1,4 +1,5 @@
-"""主动插话与接话识别：本地先筛选，活跃度大于 0 的群才会再问模型。"""
+"""主动插话与接话识别：本地先算开口意愿分，过了本群门槛才问模型；群里在聊时定时让模型看一眼。"""
+import time
 import unittest
 from datetime import timedelta
 from unittest.mock import Mock
@@ -13,37 +14,59 @@ ROOM, CAT, ROBOT, OTHER = daily.ROOM, daily.CAT, daily.ROBOT, daily.OTHER
 
 
 class FilterTests(unittest.TestCase):
-    def test_activity_decides_which_moments_count(self):
+    def test_score_follows_need_and_drops_when_bot_just_spoke(self):
         quiet = [{"sender_id": CAT, "text": "哈哈", "bot": False, "id": 1}]
-        self.assertEqual(pro.candidate_reason("哈哈", quiet, bot_id=ROBOT, level=10), "")
-        self.assertEqual(pro.candidate_reason("这个怎么弄？", quiet, bot_id=ROBOT, level=2), "")
-        self.assertEqual(pro.candidate_reason("这个怎么弄？", quiet, bot_id=ROBOT, level=3), "question")
+        self.assertEqual(pro.willingness("哈哈", quiet, bot_id=ROBOT), (0.0, ""))
+        asked, reason = pro.willingness("这个怎么弄？", quiet, bot_id=ROBOT)
+        self.assertEqual(reason, "question")
+        helped, _ = pro.willingness("求助，这个怎么弄？", quiet, bot_id=ROBOT)
+        self.assertGreater(helped, asked)
         fight = [{"sender_id": CAT, "text": "你闭嘴", "bot": False, "id": 1},
                  {"sender_id": OTHER, "text": "你才废物", "bot": False, "id": 2}]
-        self.assertEqual(pro.candidate_reason("行吧", fight, bot_id=ROBOT, level=3), "mediate")
-        waiting = [{"sender_id": CAT, "text": "有人知道吗", "bot": False, "id": 4, "age_seconds": 20}]
-        self.assertEqual(pro.candidate_reason("我到了", waiting, current_id=9, bot_id=ROBOT, level=1), "unanswered")
-        self.assertEqual(pro.base_cooldown(1), 1800)
-        self.assertEqual(pro.base_cooldown(10), 45)
-        self.assertGreater(pro.base_cooldown(4), pro.base_cooldown(6))
+        self.assertEqual(pro.willingness("行吧", fight, bot_id=ROBOT)[1], "mediate")
+        short = [{"sender_id": CAT, "text": "有人知道吗", "bot": False, "id": 4, "age_seconds": 20}]
+        long = [dict(short[0], age_seconds=120)]
+        self.assertGreater(pro.willingness("我到了", long, current_id=9, bot_id=ROBOT)[0],
+                           pro.willingness("我到了", short, current_id=9, bot_id=ROBOT)[0])
+        after_bot = quiet + [{"sender_id": ROBOT, "text": "我在", "bot": True, "id": 2}]
+        self.assertLess(pro.willingness("这个怎么弄？", after_bot, bot_id=ROBOT)[0], asked - 0.3)
 
-    def test_activity_setting_defaults_off_and_old_switch_maps_to_five(self):
+    def test_activity_sets_share_and_bar(self):
+        self.assertAlmostEqual(pro.target_share(1), 0.01)
+        self.assertAlmostEqual(pro.target_share(10), 0.15)
+        self.assertAlmostEqual(pro.speak_bar(1, 1.0), 0.70)
+        self.assertAlmostEqual(pro.speak_bar(10, 2.0), 0.25)
+        self.assertAlmostEqual(pro.speak_bar(5, 0.0), 0.90)
+        self.assertAlmostEqual(pro.speak_bar(5, 1.0, 0.2), 0.70)
+        self.assertEqual(pro.glance_interval(2), 120)
+        self.assertEqual(pro.glance_interval(2, 0.4), 360)
+
+    def test_settings_default_and_validate(self):
         self.assertEqual(normalize_room_setting({}, [])["activity"], 0)
         self.assertEqual(normalize_room_setting({"proactive_enabled": True}, [])["activity"], 5)
-        self.assertEqual(normalize_room_setting({"activity": 8, "proactive_enabled": True}, [])["activity"], 8)
-        with self.assertRaises(BehaviorError):
-            normalize_room_setting({"activity": 11}, [])
+        self.assertEqual(normalize_room_setting({}, [])["glance_minutes"], 2)
+        self.assertEqual(normalize_room_setting({"glance_minutes": 0}, [])["glance_minutes"], 0)
+        for bad in ({"activity": 11}, {"glance_minutes": 61}):
+            with self.assertRaises(BehaviorError):
+                normalize_room_setting(bad, [])
 
-    def test_ignored_lines_widen_the_gap_and_complaints_mute(self):
+    def test_budget_feedback_and_mute(self):
         gate = pro.ProactiveGate()
+        gate.earn(ROOM, 5)
+        self.assertEqual(gate.tokens(ROOM), pro.BUDGET_CAP)
         gate.mark(ROOM, now=0)
-        self.assertTrue(gate.allow(ROOM, 60, 0, now=190))
-        self.assertEqual(gate.scale(ROOM), 2)
-        gate.engaged(ROOM)
-        self.assertEqual(gate.scale(ROOM), 1)
-        gate.mute(ROOM, now=200)
-        self.assertFalse(gate.allow(ROOM, 60, 0, now=300))
-        self.assertTrue(gate.allow(ROOM, 60, 0, now=3801))
+        self.assertEqual(gate.tokens(ROOM), pro.BUDGET_CAP - 1)
+        self.assertFalse(gate.allow(ROOM, 0, now=30))
+        self.assertTrue(gate.allow(ROOM, 0, now=61))
+        self.assertFalse(gate.settle(ROOM, now=100))
+        self.assertTrue(gate.settle(ROOM, now=181))
+        self.assertFalse(gate.settle(ROOM, now=400))
+        gate.mark(ROOM, now=500)
+        self.assertTrue(gate.engaged(ROOM))
+        self.assertFalse(gate.engaged(ROOM))
+        gate.mute(ROOM, now=600)
+        self.assertFalse(gate.allow(ROOM, 0, now=700))
+        self.assertTrue(gate.allow(ROOM, 0, now=4201))
         recent = [{"sender_id": ROBOT, "text": "我来说两句", "bot": True, "id": 1}]
         self.assertTrue(pro.annoyed("闭嘴吧你", recent, 2, ROBOT))
         self.assertFalse(pro.annoyed("闭嘴吧你", [{"sender_id": OTHER, "text": "哈", "id": 1}], 2, ROBOT))
@@ -63,6 +86,15 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(pro.clean_reply("不说。"), "")
         self.assertEqual(len(pro.clean_reply("啊" * 100)), 80)
 
+    def test_glance_needs_fresh_lines_while_chat_is_live(self):
+        lines = [{"sender_id": CAT, "text": "去爬山", "id": 1, "age_seconds": 40},
+                 {"sender_id": OTHER, "text": "好啊", "id": 2, "age_seconds": 30}]
+        self.assertTrue(pro.glance_due(lines, ROBOT, None))
+        self.assertFalse(pro.glance_due(lines, ROBOT, 2))
+        self.assertFalse(pro.glance_due([dict(row, age_seconds=200) for row in lines], ROBOT, None))
+        self.assertFalse(pro.glance_due(lines + [{"sender_id": ROBOT, "text": "我也去", "bot": True, "id": 3,
+                                                  "age_seconds": 10}], ROBOT, None))
+
 
 class PluginTests(unittest.TestCase):
     setUp = daily.DailySummaryTests.setUp
@@ -76,8 +108,8 @@ class PluginTests(unittest.TestCase):
             plugin.on_unload(self.ctx)
         daily.DailySummaryTests.tearDown(self)
 
-    def start(self, activity=5):
-        self.store.room_settings[ROOM] = {"activity": activity}
+    def start(self, activity=5, **setting):
+        self.store.room_settings[ROOM] = {"activity": activity, **setting}
         self.backend.capabilities = ("text.quote.send",)
         self.backend.send_quote_text = lambda room, original_id, text: self.backend.sent.append((room, text, original_id)) or True
         self.backend.send_at_text = lambda room, text, ids: self.backend.sent.append((room, text, ids)) or True
@@ -126,6 +158,11 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(self.backend.sent, [(ROOM, "我帮你看一眼")])
         self.say("那下一步呢", 2, sender=OTHER)
         self.assertEqual(len(self.judged), 1)
+
+    def test_low_activity_holds_back_a_plain_question(self):
+        self.start(activity=2)
+        self.say("这个怎么弄？", 1)
+        self.assertEqual(self.judged, [])
 
     def test_model_can_quote_the_person_it_answers(self):
         self.start()
@@ -179,31 +216,66 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(self.backend.sent[-1][1].endswith("这是回答。"))
         self.assertEqual(len(self.backend.sent), 2)
 
-    def test_complaint_mutes_proactive_lines(self):
+    def test_complaint_mutes_and_raises_the_bar(self):
         self.start()
         self.say("这个怎么弄？", 1)
         self.say("闭嘴吧", 2, sender=OTHER)
+        self.assertAlmostEqual(self.store.proactive_bias(ROOM), pro.ANNOYED_STEP)
         self.now += timedelta(minutes=10)
         self.say("还有谁会修电脑？", 3, sender=OTHER)
         self.assertEqual(len(self.judged), 1)
 
-    def test_quiet_group_gets_one_follow_up_per_silence(self):
+    def test_reactions_move_the_room_bar_and_persist(self):
         self.start()
+        self.say("这个怎么弄？", 1)
+        self.at("谢谢你", 2, sender=OTHER)
+        self.assertAlmostEqual(self.store.proactive_bias(ROOM), pro.ENGAGED_STEP)
+        self.plugin.gate.mark(ROOM)
+        self.plugin._settle(self.ctx, ROOM, now=time.monotonic() + pro.IGNORE_WINDOW + 1)
+        self.assertAlmostEqual(self.store.proactive_bias(ROOM), pro.ENGAGED_STEP + pro.IGNORED_STEP)
+        self.assertEqual(self.store.shift_proactive_bias(ROOM, 5, pro.BIAS_LOW, pro.BIAS_HIGH), pro.BIAS_HIGH)
+
+    def test_quiet_group_gets_one_follow_up_per_silence(self):
+        self.start(activity=10)
         self.store.record(self.message("我们今晚吃火锅", sequence=1))
         self.now += timedelta(minutes=1)
-        self.plugin._cold_once()
+        self.plugin._watch_once()
         self.assertEqual(self.judged, [])
         self.now += timedelta(minutes=4)
         self.interject = {"reply": "火锅也不错", "quote": True}
-        self.plugin._cold_once()
+        self.plugin._watch_once()
         self.assertEqual(self.backend.sent, [(ROOM, "火锅也不错")])
         self.assertIn("安静", self.judged[0][0])
-        self.plugin._cold_once()
+        self.plugin._watch_once()
         self.assertEqual(len(self.judged), 1)
 
     def test_low_activity_skips_quiet_group(self):
         self.start(activity=3)
         self.store.record(self.message("我们今晚吃火锅", sequence=1))
         self.now += timedelta(minutes=5)
-        self.plugin._cold_once()
+        self.plugin._watch_once()
+        self.assertEqual(self.judged, [])
+
+    def test_glance_runs_on_its_interval_and_spends_budget(self):
+        self.start(activity=5, glance_minutes=2)
+        self.interject = {"reply": "我推荐香山", "quote": False}
+        self.store.record(self.message("我们周末去爬山吧", sequence=1))
+        self.store.record(self.message("好啊去哪座山", sender=OTHER, sequence=2))
+        self.plugin._watch_once(now=1000)
+        self.assertIn("隔了一会儿", self.judged[0][0])
+        self.assertEqual(self.backend.sent, [(ROOM, "我推荐香山")])
+        for sequence, text in ((3, "香山人多吗"), (4, "周末肯定多"), (5, "那早点出发")):
+            self.store.record(self.message(text, sequence=sequence))
+        self.plugin._watch_once(now=1010)
+        self.plugin._watch_once(now=1121)
+        self.assertEqual(len(self.judged), 1)
+        self.plugin.gate.earn(ROOM, 1)
+        self.plugin._watch_once(now=1130)
+        self.assertEqual(len(self.judged), 2)
+
+    def test_glance_off_when_interval_is_zero(self):
+        self.start(activity=10, glance_minutes=0)
+        self.store.record(self.message("我们周末去爬山吧", sequence=1))
+        self.store.record(self.message("好啊去哪座山", sender=OTHER, sequence=2))
+        self.plugin._watch_once(now=1000)
         self.assertEqual(self.judged, [])

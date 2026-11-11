@@ -1,5 +1,6 @@
 """真正艾特机器人、叫到本群别名，或引用机器人的话时，用本群人格回复。
-本群活跃度大于 0 时，没被点名也会认出接着跟机器人说的话，并在合适的时候主动插一句。"""
+本群活跃度大于 0 时，没被点名也会认出接着跟机器人说的话；每句话先在本地算开口意愿分，
+过了本群门槛才问模型。群里在聊时还会隔几分钟让模型看一眼，冷场时也会掂量要不要接一句。"""
 import threading
 import time
 from datetime import datetime
@@ -18,8 +19,9 @@ from wxbot_framework.speech import deliver_model_reply
 from wxbot_framework.summary import CONTROL
 from wxbot_framework.text import own_group_command
 
-_REASON = {"mediate": "拉架", "question": "提问", "bot_thread": "接话",
-           "unanswered": "未接的问题", "join": "话题", "cold": "冷场"}
+_REASON = {"mediate": "拉架", "question": "提问", "unanswered": "未接的问题",
+           "join": "话题", "cold": "冷场", "glance": "看群"}
+WATCH_SECONDS = 30
 
 
 class Plugin:
@@ -33,15 +35,16 @@ class Plugin:
         self.gate = pro.ProactiveGate()
         self.followups = pro.FollowUps()
         self._cold_seen = {}
-        self._cold_stop = threading.Event()
-        self._cold = threading.Thread(target=self._cold_loop, args=(ctx,), name="ProactiveCold", daemon=True)
-        self._cold.start()
+        self._glanced = {}
+        self._watch_stop = threading.Event()
+        self._watch = threading.Thread(target=self._watch_loop, args=(ctx,), name="ProactiveWatch", daemon=True)
+        self._watch.start()
 
     def on_unload(self, ctx):
         worker = getattr(self, "memory", None)
         if worker is not None:
             worker.stop()
-        stop = getattr(self, "_cold_stop", None)
+        stop = getattr(self, "_watch_stop", None)
         if stop is not None:
             stop.set()
 
@@ -59,6 +62,9 @@ class Plugin:
         level = self.members.room_activity(room)
         if level == 0:
             return
+        # 群里每多一句话，机器人就多攒一点发言份额。
+        self.gate.earn(room, pro.target_share(level))
+        self._settle(ctx, room)
         recent = self.members.recent_room_lines(room, pro.CANDIDATE_SECONDS, 20)
         current_id = self._current_id(recent, message)
         if pro.annoyed(message.text, recent, current_id, bot):
@@ -106,7 +112,8 @@ class Plugin:
             else:
                 model_seconds, send_seconds = self.reply_to_member(message, ctx, snapshot, personality, guard)
                 self.followups.open(room, sender)
-            self.gate.engaged(room)
+            if self.gate.engaged(room):
+                self._feedback(ctx, room, pro.ENGAGED_STEP, "有人接了插话")
             ctx.logger.info("回复耗时 | 群=%s | 方式=%s | 人格=%s | 送给模型=%d条 | 窗口=%d条 %.2f秒 | 调用模型 %.2f秒 | 发送含等待 %.2f秒 | 合计 %.2f秒",
                             room, "接话" if follow_up else "点名", personality.name,
                             len(working_messages(snapshot.messages)), len(snapshot.messages), prepared - started,
@@ -173,8 +180,22 @@ class Plugin:
     def _mute(self, ctx, room):
         if not self.gate.muted(room):
             ctx.logger.info("主动插话 | 群=%s | 有人嫌机器人吵，1 小时内不主动开口", room)
+            self._feedback(ctx, room, pro.ANNOYED_STEP, "有人嫌吵")
         self.gate.mute(room)
         self.followups.close(room)
+
+    def _settle(self, ctx, room, now=None):
+        if self.gate.settle(room, now):
+            self._feedback(ctx, room, pro.IGNORED_STEP, "上一句插话没人接")
+
+    def _feedback(self, ctx, room, step, why):
+        """群友的反应让本群门槛慢慢升降，写进库里，重启后保留。"""
+        try:
+            value = self.members.shift_proactive_bias(room, step, pro.BIAS_LOW, pro.BIAS_HIGH)
+        except Exception:
+            ctx.logger.warning("主动插话门槛修正没有保存 | 群=%s", room)
+            return
+        ctx.logger.info("主动插话 | 群=%s | %s，门槛修正 %+.2f", room, why, value)
 
     def _follows_up(self, message, recent, current_id):
         room, sender = message.chat_id, message.sender_id
@@ -198,18 +219,18 @@ class Plugin:
         return None
 
     def _consider(self, message, ctx, recent, current_id, level):
-        """没被点名时先本地筛选。不像该接的话，不会打到模型。"""
-        if pro.bot_spoke_recently(recent, self.members.account):
-            return
-        reason = pro.candidate_reason(message.text, recent, current_id=current_id,
-                                      bot_id=self.members.account, level=level)
+        """意愿分没过本群门槛时不会打到模型。"""
+        room = message.chat_id
+        score, reason = pro.willingness(message.text, recent, current_id=current_id,
+                                        bot_id=self.members.account, level=level)
         if not reason:
             return
-        if not self.gate.allow(message.chat_id, pro.base_cooldown(level), pro.judge_gap(reason)):
+        bar = pro.speak_bar(level, self.gate.tokens(room), self.members.proactive_bias(room))
+        if score < bar or not self.gate.allow(room, pro.JUDGE_GAP):
             return
-        self._interject(ctx, message.chat_id, level, reason, message, current_id)
+        self._interject(ctx, room, level, reason, message, current_id, basis=f"意愿={score:.2f} 门槛={bar:.2f}")
 
-    def _interject(self, ctx, room, level, reason, target, current_id=None):
+    def _interject(self, ctx, room, level, reason, target, current_id=None, *, basis="", now=None):
         """和点名回复看同一段上下文。模型说不必开口就沉默；判断期间有人先说了也放弃。"""
         bot = self.members.account
         started = time.perf_counter()
@@ -234,11 +255,12 @@ class Plugin:
         elapsed = time.perf_counter() - started
         label = _REASON.get(reason, reason)
         if not reply:
-            ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | 不说 | 模型 %.2f秒", room, level, label, elapsed)
+            ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | %s | 不说 | 模型 %.2f秒",
+                            room, level, label, basis, elapsed)
             return
         if self._moved_on(room, last_id):
-            ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | 有人先说了，放弃 | 模型 %.2f秒",
-                            room, level, label, elapsed)
+            ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | %s | 有人先说了，放弃 | 模型 %.2f秒",
+                            room, level, label, basis, elapsed)
             return
         quote = current_id is not None and isinstance(result, dict) and result.get("quote") is True
         guard = lambda: ctx.personality_guard(personality)
@@ -260,9 +282,9 @@ class Plugin:
             self.members.record_bot_reply(target, reply)
         except Exception:
             ctx.logger.warning("主动插话已发出，但没有写入群流水")
-        self.gate.mark(room)
-        ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | 已发送%s | 模型 %.2f秒",
-                        room, level, label, "（引用）" if quote else "", elapsed)
+        self.gate.mark(room, now)
+        ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | %s | 已发送%s | 模型 %.2f秒",
+                        room, level, label, basis, "（引用）" if quote else "", elapsed)
 
     def _people(self, room, rows):
         """窗口里最近说话的几位群友的档案。"""
@@ -285,43 +307,71 @@ class Plugin:
         return any(row["id"] > last_id and not pro.is_bot(row, self.members.account)
                    for row in self.members.recent_room_lines(room, 600, 10))
 
-    def _cold_loop(self, ctx):
-        """群里刚才还在聊、又安静了一会儿时，单独看要不要接一句。"""
-        while not self._cold_stop.wait(60):
+    def _watch_loop(self, ctx):
+        """定时巡检各群：冷场时掂量接一句，群里在聊时隔几分钟让模型看一眼。"""
+        while not self._watch_stop.wait(WATCH_SECONDS):
             try:
-                self._cold_once(ctx)
+                self._watch_once(ctx)
             except RuntimeError:
                 return
             except Exception:
                 ctx.logger.exception("主动插话巡检出错")
 
-    def _cold_once(self, ctx=None):
+    def _watch_once(self, ctx=None, now=None):
         ctx = ctx or getattr(self, "ctx", None)
         if ctx is None:
             return
         for room in list(self.members.groups):
-            if self._cold_stop.is_set():
+            if self._watch_stop.is_set():
                 return
-            self._cold_room(ctx, room)
+            if "mention_chat" in self.members.disabled_plugins(room):
+                continue
+            level = self.members.room_activity(room)
+            if level == 0:
+                continue
+            self._settle(ctx, room, now)
+            if self.gate.muted(room, now):
+                continue
+            lines = self.members.recent_room_lines(room, pro.COLD_MAX_SECONDS, 12)
+            if lines:
+                self._cold_room(ctx, room, level, lines, now)
+                self._glance_room(ctx, room, level, lines, now)
 
-    def _cold_room(self, ctx, room):
-        if "mention_chat" in self.members.disabled_plugins(room):
-            return
-        level = self.members.room_activity(room)
-        if level < pro.REASON_LEVEL["cold"] or self.gate.muted(room):
-            return
-        lines = self.members.recent_room_lines(room, pro.COLD_MAX_SECONDS, 12)
-        if not lines or pro.bot_spoke_recently(lines, self.members.account):
+    def _cold_room(self, ctx, room, level, lines, now=None):
+        bot = self.members.account
+        if pro.bot_spoke_recently(lines, bot):
             return
         last = lines[-1]
         age = last.get("age_seconds")
-        # 同一段安静只判断一次。
+        # 同一段安静只掂量一次。
         if (not isinstance(age, (int, float)) or not pro.COLD_MIN_SECONDS <= age <= pro.COLD_MAX_SECONDS or
                 self._cold_seen.get(room) == last["id"]):
             return
-        if not self.gate.allow(room, pro.base_cooldown(level), pro.COLD_JUDGE_GAP):
-            return
         self._cold_seen[room] = last["id"]
-        anchor = Message("", room, sender_id=self.members.account, is_group=True,
-                         session_id=last.get("session_id") or "", sequence=0)
-        self._interject(ctx, room, level, "cold", anchor)
+        score = pro.cold_score(lines, bot, level)
+        bar = pro.speak_bar(level, self.gate.tokens(room), self.members.proactive_bias(room))
+        if score < bar or not self.gate.allow(room, pro.COLD_JUDGE_GAP, now):
+            return
+        self._interject(ctx, room, level, "cold", self._anchor(room, last),
+                        basis=f"意愿={score:.2f} 门槛={bar:.2f}", now=now)
+
+    def _glance_room(self, ctx, room, level, lines, now=None):
+        """群里还在聊、份额也够一句时，隔一段时间让模型看一眼，由它判断现在适不适合插话。"""
+        minutes = self.members.room_glance_minutes(room)
+        tokens = self.gate.tokens(room)
+        if minutes == 0 or tokens < 1:
+            return
+        moment = time.monotonic() if now is None else now
+        last_time, last_id = self._glanced.get(room, (None, None))
+        interval = pro.glance_interval(minutes, self.members.proactive_bias(room))
+        if last_time is not None and moment - last_time < interval:
+            return
+        if not pro.glance_due(lines, self.members.account, last_id) or not self.gate.allow(room, pro.JUDGE_GAP, now):
+            return
+        self._glanced[room] = (moment, lines[-1]["id"])
+        self._interject(ctx, room, level, "glance", self._anchor(room, lines[-1]),
+                        basis=f"份额={tokens:.2f}", now=now)
+
+    def _anchor(self, room, last):
+        return Message("", room, sender_id=self.members.account, is_group=True,
+                       session_id=last.get("session_id") or "", sequence=0)
