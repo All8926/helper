@@ -220,6 +220,23 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(self.backend.sent[-1][1].endswith("这是回答。"))
         self.assertEqual(len(self.backend.sent), 2)
 
+    def test_quoting_the_bot_by_sender_replies_even_when_the_original_is_voice(self):
+        self.start(activity=0)
+        voice = Message("你刚才说的啥", ROOM, sender_id=OTHER, is_group=True, session_id="test", sequence=1, type=49,
+                        data={"app_type": 57, "quoted_sender_id": ROBOT,
+                              "quoted_message": {"author": "机器人", "kind": "voice", "text": "[语音]",
+                                                 "available": True, "truncated": False}})
+        self.store.record(voice)
+        self.plugin.on_message(voice, self.ctx)
+        self.assertEqual(len(self.backend.sent), 1)
+        someone = Message("你刚才说的啥", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=2, type=49,
+                          data={"app_type": 57, "quoted_sender_id": OTHER,
+                                "quoted_message": {"author": "别人", "kind": "voice", "text": "[语音]",
+                                                   "available": True, "truncated": False}})
+        self.store.record(someone)
+        self.plugin.on_message(someone, self.ctx)
+        self.assertEqual(len(self.backend.sent), 1)
+
     def test_complaint_mutes_and_raises_the_bar(self):
         self.start()
         self.say("这个怎么弄？", 1)

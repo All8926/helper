@@ -499,6 +499,8 @@ class NativeTextService(NativeFileHelperService):
                     # 编号只用于对上本机已下载的图，不放进引用摘要。
                     if quoted.reference.message_id:
                         data['quoted_message_id'] = quoted.reference.message_id
+                    if quoted.reference.sender_id:
+                        data['quoted_sender_id'] = quoted.reference.sender_id
                     if data["is_self"] and any(chat == data["chat_id"] and text == quoted.text and
                                                time.monotonic() - sent_at < 120
                                                for chat, text, sent_at in tuple(self._sent_quotes)):

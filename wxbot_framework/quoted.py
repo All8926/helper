@@ -83,8 +83,9 @@ class QuotedContent:
     text: str = '[原消息未提供]'
     available: bool = False
     truncated: bool = False
-    # 只在进程内对上已下载图片，不进入 public()，也不交给模型。
+    # 只在进程内对上已下载图片或原发言人，不进入 public()，也不交给模型。
     message_id: str = ''
+    sender_id: str = ''
 
     def public(self):
         # 不带原始 XML、CDN 地址、凭据、路径或引用作者的内部 ID。
@@ -101,17 +102,30 @@ class QuotedMessage:
         return {'app_type': 57, 'quoted_text': self.text, 'quoted_message': self.reference.public()}
 
 
+def _quoted_sender(node):
+    """群里的原发言人在 chatusr；fromusr 经常是群 ID。只留个人微信 ID。"""
+    chat = _clean(_field(node, 'chatusr'), 64, label=True)
+    room = _clean(_field(node, 'fromusr'), 64, label=True)
+    candidate = chat or room
+    if (not candidate or candidate.endswith('@chatroom') or candidate == 'filehelper' or
+            candidate.startswith('gh_') or any(ord(char) < 33 or ord(char) == 127 for char in candidate)):
+        return ''
+    return candidate
+
+
 def _reference(node, depth):
     author = _clean(_field(node, 'displayname'), 128, label=True)
+    sender = _quoted_sender(node)
     kind = _field(node, 'type').strip()
     raw = _field(node, 'content')
     if kind == '1':
         text = _clean(raw, MAX_TEXT)
-        return QuotedContent(author, 'text', text or '[原消息未提供]', bool(text), len(raw) > MAX_TEXT)
+        return QuotedContent(author, 'text', text or '[原消息未提供]', bool(text), len(raw) > MAX_TEXT,
+                             sender_id=sender)
     if kind.isascii() and kind.isdecimal() and len(kind) < 8 and int(kind) in _LABELS:
         media, label = _LABELS[int(kind)]
         identifier = _server_id(node) if media == 'image' else ''
-        return QuotedContent(author, media, label, True, message_id=identifier)
+        return QuotedContent(author, media, label, True, message_id=identifier, sender_id=sender)
     if kind == '49' and raw.strip() and depth < 2:
         try:
             inner = _xml(raw)
@@ -124,14 +138,15 @@ def _reference(node, depth):
                     if nested is not None:
                         text = nested.text + '\n引用 ' + (nested.reference.author or '未知作者') + '：' + nested.reference.text
                         return QuotedContent(author, 'quote', _clean(text, MAX_TEXT), True,
-                                             len(text) > MAX_TEXT or nested.reference.truncated)
+                                             len(text) > MAX_TEXT or nested.reference.truncated, sender_id=sender)
                 if subtype in ('5', '6'):
                     title = _clean(_field(app, 'title'), 256, label=True)
                     return QuotedContent(author, 'link' if subtype == '5' else 'file',
-                                         ('[链接]' if subtype == '5' else '[文件]') + (' ' + title if title else ''), True)
+                                         ('[链接]' if subtype == '5' else '[文件]') + (' ' + title if title else ''), True,
+                                         sender_id=sender)
         except QuoteError:
             pass
-    return QuotedContent(author, text='[无法读取的引用内容]')
+    return QuotedContent(author, text='[无法读取的引用内容]', sender_id=sender)
 
 
 def _parse(root, depth=0):

@@ -91,8 +91,7 @@ class Plugin:
         """艾特机器人、正文里出现本群别名、或引用机器人说过的话，都进入同一套回复。斜杠指令留给对应功能。"""
         if message.type == 49:
             quoted = reference(message)
-            if (quoted is not None and quoted.kind == "text" and bool(message.text.strip()) and
-                    self.members.bot_said(message.chat_id, quoted.text)):
+            if quoted is not None and message.text.strip() and self._quotes_bot(message, quoted):
                 return True
             # 引用文字仍只认机器人自己的话。引用图片时，艾特或别名也算点名。
             if quoted is None or quoted.kind == "text":
@@ -100,6 +99,13 @@ class Plugin:
         mentioned = bool(message.data.get("is_at_self") and
                          self.members.account in message.data.get("at_members", ()))
         return mentioned or self.members.alias_mentioned(message.chat_id, message.text)
+
+    def _quotes_bot(self, message, quoted):
+        """微信引用带原发言人 ID。对不上时，仍用正文比对机器人最近说过的话。"""
+        sender = message.data.get("quoted_sender_id") or ""
+        if sender and sender == self.members.account:
+            return True
+        return quoted.kind == "text" and self.members.bot_said(message.chat_id, quoted.text)
 
     def _answer(self, message, ctx, *, follow_up=False):
         room, sender = message.chat_id, message.sender_id

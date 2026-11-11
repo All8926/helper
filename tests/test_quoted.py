@@ -37,6 +37,8 @@ class QuoteParserTests(unittest.TestCase):
         self.assertEqual(value.reference.text, '1 < 2 & 原样 &lt;tag&gt;\n第二行')
         self.assertTrue(value.reference.available)
         self.assertEqual(value.reference.kind, 'text')
+        self.assertEqual(value.reference.sender_id, OTHER)
+        self.assertNotIn(OTHER, json.dumps(value.public()))
         self.assertNotIn('svrid', json.dumps(value.public()))
 
     def test_cdata_and_missing_reference(self):
@@ -207,6 +209,8 @@ class NativeQuoteTests(unittest.TestCase):
         self.assertEqual(message.type, 49)
         self.assertEqual(message.sender_id, FRIEND)
         self.assertEqual(reference(message).author, '被引用者')
+        self.assertEqual(data['quoted_sender_id'], OTHER)
+        self.assertNotIn(OTHER, json.dumps(data['quoted_message']))
         self.service._file_receiver.submit.assert_not_called()
         self.service._forwarded_receiver.submit.assert_not_called()
         self.service.monitor_handler.assert_not_called()  # 正常事件在框架中只观察一次。
