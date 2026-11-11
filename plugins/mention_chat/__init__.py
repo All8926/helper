@@ -273,18 +273,13 @@ class Plugin:
             ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | %s | 有人先说了，放弃 | 模型 %.2f秒",
                             room, level, label, basis, elapsed)
             return
-        quote = current_id is not None and isinstance(result, dict) and result.get("quote") is True
+        # 主动插话一律直接发到群里。模型就算返回 quote，也不引用、不艾特。
         speak = result.get("voice") if choose_voice and isinstance(result, dict) else None
         if type(speak) is not bool:
             speak = None
         guard = lambda: ctx.personality_guard(personality)
         try:
-            if quote:
-                display = self.members.display_name(target.sender_id, room) or "群友"
-                deliver_model_reply(ctx, target, reply, display_name=display, delivery_guard=guard, speak=speak)
-                self.followups.open(room, target.sender_id)
-            else:
-                deliver_model_reply(ctx, target, reply, delivery_guard=guard, speak=speak)
+            deliver_model_reply(ctx, target, reply, delivery_guard=guard, speak=speak)
         except SnapshotExpired:
             ctx.logger.info("主动插话已取消：人格已切换")
             return
@@ -296,8 +291,8 @@ class Plugin:
         except Exception:
             ctx.logger.warning("主动插话已发出，但没有写入群流水")
         self.gate.mark(room, now)
-        ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | %s | 已发送%s | 模型 %.2f秒",
-                        room, level, label, basis, "（引用）" if quote else "", elapsed)
+        ctx.logger.info("主动插话 | 群=%s | 活跃度=%d | 原因=%s | %s | 已发送 | 模型 %.2f秒",
+                        room, level, label, basis, elapsed)
 
     def _people(self, room, rows):
         """窗口里最近说话的几位群友的档案。"""

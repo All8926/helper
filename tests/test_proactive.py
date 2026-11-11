@@ -164,11 +164,11 @@ class PluginTests(unittest.TestCase):
         self.say("这个怎么弄？", 1)
         self.assertEqual(self.judged, [])
 
-    def test_model_can_quote_the_person_it_answers(self):
+    def test_proactive_line_stays_plain_even_if_model_asks_to_quote(self):
         self.start()
         self.interject = {"reply": "试试先重启", "quote": True}
         self.say("这个怎么弄？", 1)
-        self.assertEqual(self.backend.sent, [(ROOM, "试试先重启", 1)])
+        self.assertEqual(self.backend.sent, [(ROOM, "试试先重启")])
 
     def test_someone_answering_during_the_call_cancels_the_line(self):
         self.start()
