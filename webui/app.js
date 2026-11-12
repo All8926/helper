@@ -306,8 +306,18 @@ function roomLabel(room) {
 }
 function readBehaviorForm() {
   const boxes = [...$('#behavior-plugins').querySelectorAll('[data-room-plugin]')];
+  const savedDisabled = config?.room_settings?.[behaviorRoom]?.disabled_plugins || [];
   const disabled = boxes.length ? boxes.filter(node => !node.checked).map(node => node.dataset.roomPlugin)
-    : (config?.room_settings?.[behaviorRoom]?.disabled_plugins || []);
+    : savedDisabled.filter(name => !recallPlugins.includes(name));
+  for (const name of recallPlugins) {
+    const node = document.querySelector(`[data-recall="${name}"]`);
+    const plugin = (state?.plugins || []).find(item => item.name === name);
+    if (!plugin?.enabled) {
+      if (savedDisabled.includes(name) && !disabled.includes(name)) disabled.push(name);
+      continue;
+    }
+    if (!node?.checked && !disabled.includes(name)) disabled.push(name);
+  }
   return {admins: lines($('#behavior-admins').value), aliases: lines($('#behavior-aliases').value),
     personality: $('#behavior-personality').value || '默认', disabled_plugins: disabled,
     context_hours: contextNumber($('#behavior-hours').value, 6),
@@ -404,12 +414,30 @@ function showBehavior(room) {
   const title = $('#behavior-room-title');
   if (title) title.textContent = room ? roomLabel(room) : '当前群';
 }
+const recallPlugins = ['anti_recall', 'anti_recall_image', 'anti_recall_file', 'anti_recall_voice'];
 let roomPluginSignature = '';
+function paintRecall(disabled) {
+  const off = new Set(disabled || []);
+  const plugins = state?.plugins || [];
+  for (const name of recallPlugins) {
+    const node = document.querySelector(`[data-recall="${name}"]`);
+    if (!node) return;
+    const plugin = plugins.find(item => item.name === name);
+    node.disabled = !plugin?.enabled;
+    node.checked = !!plugin?.enabled && !off.has(name);
+  }
+  const local = $('#behavior-recall-local');
+  const localPlugin = plugins.find(item => item.name === 'anti_recall_local');
+  if (!local) return;
+  local.disabled = !localPlugin;
+  local.checked = !!localPlugin?.enabled;
+}
 function paintRoomPlugins(disabled) {
   const box = $('#behavior-plugins');
   if (!box) return;
   const off = new Set(disabled || []);
-  const plugins = (state?.plugins || []).filter(plugin => plugin.enabled);
+  paintRecall(off);
+  const plugins = (state?.plugins || []).filter(plugin => plugin.enabled && !recallPlugins.includes(plugin.name));
   const signature = JSON.stringify([behaviorRoom, plugins.map(plugin => plugin.name), [...off]]);
   if (signature === roomPluginSignature) return;
   roomPluginSignature = signature;
@@ -529,6 +557,8 @@ for (const id of groupsTabIds) {
 }
 for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-voice', 'behavior-voice-rate', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
+$('#behavior-recall').onchange = () => { behaviorDirty = true; };
+$('#behavior-recall-local').onchange = () => { behaviorDirty = true; };
 $('#behavior-member-search').oninput = () => {
   if ($('#behavior-member-search').value.trim()) membersExpanded = true;
   paintMemberPicks();
@@ -556,6 +586,11 @@ $('#behavior-form').onsubmit = event => {
     delete setting.voice_mode;
     delete setting.voice_id;
     await api('room-behavior', {room, setting, voice_mode: voiceMode, voice_id: voiceId});
+    const local = $('#behavior-recall-local');
+    const localPlugin = (state?.plugins || []).find(item => item.name === 'anti_recall_local');
+    if (local && localPlugin && local.checked !== !!localPlugin.enabled) {
+      await api('plugin', {name: 'anti_recall_local', action: local.checked ? 'enable' : 'disable'});
+    }
     behaviorDirty = false;
     behaviorDraft.clear();
     await loadConfig();

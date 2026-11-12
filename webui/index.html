@@ -154,6 +154,15 @@
             <input id="behavior-member-search" type="search" placeholder="搜索昵称或微信 ID" autocomplete="off">
             <p id="behavior-member-hint" class="group-name-hint">连接微信并打开该群后，可以点选成员。</p>
             <div id="behavior-members" class="member-picks hidden"></div>
+            <h3 class="group-name-heading">防撤回</h3>
+            <p class="group-name-hint">勾选本群补发后，撤回的内容会在这个群再发一遍，所有人都能看到。本机保留对当前账号的全部会话生效，只有这台电脑的微信还看得到原消息。插件管理里停用的项目，这里不能单独打开。</p>
+            <div id="behavior-recall" class="room-plugins">
+              <label class="inline"><input type="checkbox" data-recall="anti_recall">文字和表情</label>
+              <label class="inline"><input type="checkbox" data-recall="anti_recall_image">图片</label>
+              <label class="inline"><input type="checkbox" data-recall="anti_recall_file">文件</label>
+              <label class="inline"><input type="checkbox" data-recall="anti_recall_voice">语音</label>
+            </div>
+            <label class="inline" for="behavior-recall-local"><input id="behavior-recall-local" type="checkbox">本机保留原消息（全部会话，仅这台电脑）</label>
             <h3 class="group-name-heading">本群插件</h3>
             <p class="group-name-hint">勾选表示这个群使用该功能。插件管理里停用的功能不会出现在这里，私聊仍跟随账号总开关。</p>
             <div id="behavior-plugins" class="room-plugins"></div>
