@@ -152,18 +152,19 @@ class Plugin:
         memory = self.members.facts_for(message.chat_id, message.sender_id)
         client = ctx.llm_for(message, personality=personality)
         image = self._vision_image(message, ctx)
-        voice = self._auto_voice(message.chat_id)
+        rate = self._voice_rate(message.chat_id)
         try:
             reply, speak = Dialogue(client).reply(
-                snapshot, diary=diary, memory=memory, choose_voice=voice, image=image,
-                limit=self.members.reply_limit)
+                snapshot, diary=diary, memory=memory, choose_voice=rate > 0, voice_rate=rate or 5,
+                image=image, limit=self.members.reply_limit)
         except LLMError as error:
             # 文本模型拒绝图片时，仍按原来的文字回复。
             if not image or getattr(error, "status", None) != 400:
                 raise
             ctx.logger.info("看图 | 群=%s | 模型未接受图片，改为只看文字", message.chat_id)
             reply, speak = Dialogue(client).reply(
-                snapshot, diary=diary, memory=memory, choose_voice=voice, limit=self.members.reply_limit)
+                snapshot, diary=diary, memory=memory, choose_voice=rate > 0, voice_rate=rate or 5,
+                limit=self.members.reply_limit)
         reply = personality_text(reply, personality.name)
         model_seconds = time.perf_counter() - started
         return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
@@ -198,10 +199,11 @@ class Plugin:
     def _follow_up(self, message, ctx, snapshot, personality, delivery_guard):
         """模型判断不是在跟机器人说话时返回 None。"""
         started = time.perf_counter()
+        rate = self._voice_rate(message.chat_id)
         reply, speak = Dialogue(ctx.llm_for(message, personality=personality)).reply(
             snapshot, diary=self.members.recent_digests(message.chat_id),
             memory=self.members.facts_for(message.chat_id, message.sender_id), follow_up=True,
-            choose_voice=self._auto_voice(message.chat_id), limit=self.members.reply_limit)
+            choose_voice=rate > 0, voice_rate=rate or 5, limit=self.members.reply_limit)
         model_seconds = time.perf_counter() - started
         if not reply:
             return None
@@ -269,6 +271,12 @@ class Plugin:
         state = self.members.voice_selection(room)
         return bool(state.enabled and state.mode == "auto" and state.voice_id)
 
+    def _voice_rate(self, room):
+        """自动模式返回 1–10，否则返回 0。"""
+        if not self._auto_voice(room):
+            return 0
+        return self.members.room_voice_rate(room)
+
     def _can_interject(self, message):
         text = " ".join(message.text.split())
         return bool(text) and not own_group_command(text) and text.split(maxsplit=1)[0] not in CONTROL
@@ -305,10 +313,10 @@ class Plugin:
         recent_bot = [row["text"] for row in chosen if pro.is_bot(row, bot)][-3:]
         last_id = lines[-1]["id"] if lines else None
         personality = ctx.personality(target)
-        choose_voice = self._auto_voice(room)
+        rate = self._voice_rate(room)
         try:
             result = ctx.llm_for(target, personality=personality).complete_json(
-                pro.judge_system(reason, level, choose_voice=choose_voice),
+                pro.judge_system(reason, level, choose_voice=rate > 0, voice_rate=rate or 5),
                 pro.judge_input(datetime.now(BEIJING).date().isoformat(), transcript,
                                 public_diary(self.members.recent_digests(room)), self._people(room, chosen),
                                 recent_bot), search=True)
@@ -331,7 +339,7 @@ class Plugin:
                             room, level, label, basis, elapsed)
             return
         # 主动插话一律直接发到群里。模型就算返回 quote，也不引用、不艾特。
-        speak = result.get("voice") if choose_voice and isinstance(result, dict) else None
+        speak = result.get("voice") if rate > 0 and isinstance(result, dict) else None
         if type(speak) is not bool:
             speak = None
         guard = lambda: ctx.personality_guard(personality)

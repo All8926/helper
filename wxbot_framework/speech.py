@@ -13,8 +13,9 @@ from .members import SnapshotExpired
 from .summary import split_text
 from .tts import TTSError, open_tts
 
-# 链接、代码块不适合念出来。
+# 链接、代码块不适合念出来。自动模式下选了语音时，最多连续这么条。
 _UNSPEAKABLE = re.compile(r"https?://|www\.\S+|```|`[^`]{6,}`")
+MAX_AUTO_CLIPS = 3
 
 
 def speech_chunks(text, limit):
@@ -32,18 +33,20 @@ def speech_chunks(text, limit):
 
 
 def prefer_voice(text, requested, mode, limit):
-    """始终语音直接念。自动时模型按对话给出 voice，链接、代码、长串数字和超长回复仍用文字。"""
+    """始终语音直接念。自动时模型按对话和频率给出 voice；链接、代码、长串数字，以及超过 3 条的回复仍用文字。"""
     if mode != "auto":
         return True
+    if requested is not True:
+        return False
     collapsed = " ".join(str(text or "").split())
-    if not collapsed or len(collapsed) > limit:
+    if not collapsed:
         return False
     if _UNSPEAKABLE.search(str(text or "")) or sum(ch in "{}[]=<>" for ch in collapsed) >= 6:
         return False
     digits = sum(ch.isdigit() for ch in collapsed)
     if digits >= 6 and digits * 2 >= len(collapsed):
         return False
-    return requested is True
+    return len(list(speech_chunks(collapsed, limit))) <= MAX_AUTO_CLIPS
 
 
 class SpeechController:

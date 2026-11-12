@@ -363,13 +363,13 @@ def speak_rule(reason):
     return "只有这些情况才说话：有人在求助而且你能帮忙、话题明显在说你、问题还悬着没人接、正在延续你刚参与的话题。闲聊、斗图、已经有人在答、和你无关的讨论，让 reply 为空。"
 
 
-def judge_system(reason, level, choose_voice=False):
+def judge_system(reason, level, choose_voice=False, voice_rate=5):
     system = SYSTEM.format(rule=speak_rule(reason), tone=tone(level))
     if choose_voice:
-        from .dialogue import VOICE_CHOICE
+        from .dialogue import voice_choice
         system = system.replace(
             '输出仅为 JSON 对象：{"reply":""}。',
-            VOICE_CHOICE + '输出仅为 JSON 对象：{"reply":"","voice":false}。')
+            voice_choice(voice_rate) + '输出仅为 JSON 对象：{"reply":"","voice":false}。')
     return system
 
 

@@ -49,6 +49,8 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(normalize_room_setting({}, [])["activity"], 0)
         self.assertEqual(normalize_room_setting({"proactive_enabled": True}, [])["activity"], 5)
         self.assertEqual(normalize_room_setting({}, [])["glance_minutes"], 2)
+        self.assertEqual(normalize_room_setting({}, [])["voice_rate"], 5)
+        self.assertEqual(normalize_room_setting({"voice_rate": 9}, [])["voice_rate"], 9)
         self.assertTrue(normalize_room_setting({}, [])["deep_thinking"])
         self.assertFalse(normalize_room_setting({"deep_thinking": False}, [])["deep_thinking"])
         self.assertEqual(normalize_room_setting({"glance_minutes": 0}, [])["glance_minutes"], 0)
@@ -57,7 +59,7 @@ class FilterTests(unittest.TestCase):
         for bad in (0, 8001, True, 1.5, "600"):
             with self.assertRaises(BehaviorError):
                 normalize_reply_limit(bad)
-        for bad in ({"activity": 11}, {"glance_minutes": 61}, {"deep_thinking": "yes"}):
+        for bad in ({"activity": 11}, {"glance_minutes": 61}, {"voice_rate": 0}, {"deep_thinking": "yes"}):
             with self.assertRaises(BehaviorError):
                 normalize_room_setting(bad, [])
 

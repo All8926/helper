@@ -176,6 +176,18 @@ def normalize_deep_thinking(value):
     return value
 
 
+DEFAULT_VOICE_RATE = 5
+
+
+def normalize_voice_rate(value):
+    """自动语音时 1–10，越大越常把口语念出来。没填时是 5。"""
+    if value is None:
+        return DEFAULT_VOICE_RATE
+    if type(value) is not int or not 1 <= value <= MAX_ACTIVITY:
+        raise BehaviorError("语音频率应为 1–10 的整数")
+    return value
+
+
 def normalize_glance_minutes(value):
     """群里在聊时隔几分钟让模型看一眼。没填时 2 分钟，0 表示不看。"""
     if value is None:
@@ -261,6 +273,7 @@ def normalize_room_setting(value, names):
             "context_limit": normalize_context_limit(value.get("context_limit")),
             "activity": normalize_activity(value.get("activity"), value.get("proactive_enabled")),
             "glance_minutes": normalize_glance_minutes(value.get("glance_minutes")),
+            "voice_rate": normalize_voice_rate(value.get("voice_rate")),
             "deep_thinking": normalize_deep_thinking(value.get("deep_thinking")),
             "plugin_options": normalize_plugin_options(value.get("plugin_options"))}
 

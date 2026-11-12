@@ -750,6 +750,15 @@ class MemberStore:
         except BehaviorError:
             return 0
 
+    def room_voice_rate(self, room):
+        """自动语音的频率，1–10。没写时是 5。"""
+        from .room_behavior import BehaviorError, DEFAULT_VOICE_RATE, normalize_voice_rate
+        setting = self.room_settings.get(room) or {}
+        try:
+            return normalize_voice_rate(setting.get("voice_rate"))
+        except BehaviorError:
+            return DEFAULT_VOICE_RATE
+
     def room_glance_minutes(self, room):
         """群里在聊时隔几分钟让模型看一眼，0 表示不看。"""
         from .room_behavior import BehaviorError, DEFAULT_GLANCE_MINUTES, normalize_glance_minutes

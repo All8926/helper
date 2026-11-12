@@ -147,6 +147,8 @@ class SpeechTests(unittest.TestCase):
         self.assertFalse(prefer_voice('看这个 https://example.com', True, 'auto', 160))
         self.assertFalse(prefer_voice('订单号 13800138000', True, 'auto', 160))
         self.assertFalse(prefer_voice('好的', None, 'auto', 160))
+        self.assertTrue(prefer_voice('啊' * 300, True, 'auto', 160))
+        self.assertFalse(prefer_voice('啊' * 500, True, 'auto', 160))
         self.assertTrue(prefer_voice('很长的一段也照样念', False, 'always', 4))
         self.setup_speech()
         self.speech.select(ROOM, FIRST.name)
@@ -163,7 +165,7 @@ class SpeechTests(unittest.TestCase):
         plugin.on_load(self.ctx)
         try:
             plugin.on_message(msg, self.ctx)
-            self.assertIn('根据刚才的对话', self.ctx._llm.complete_json.call_args.args[0])
+            self.assertIn('语音频率是 5/10', self.ctx._llm.complete_json.call_args.args[0])
             self.assertIn('"voice":false', self.ctx._llm.complete_json.call_args.args[0])
             self.assertEqual(self.client.synthesize.call_count, 2)
         finally:
