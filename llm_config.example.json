@@ -6,5 +6,13 @@
   "max_tokens": 512,
   "json_mode": true,
   "token_limit_parameter": "max_tokens",
-  "extra_body": {}
+  "extra_body": {},
+  "web_search": {
+    "enabled": false,
+    "provider": "http",
+    "base_url": "",
+    "api_key": "",
+    "timeout_seconds": 8,
+    "count": 5
+  }
 }

@@ -311,7 +311,7 @@ class Plugin:
                 pro.judge_system(reason, level, choose_voice=choose_voice),
                 pro.judge_input(datetime.now(BEIJING).date().isoformat(), transcript,
                                 public_diary(self.members.recent_digests(room)), self._people(room, chosen),
-                                recent_bot))
+                                recent_bot), search=True)
             cleaned = pro.clean_reply(result.get("reply") if isinstance(result, dict) else "")
             reply = personality_text(cleaned, personality.name) if cleaned else ""
             if reply and len(reply) > self.members.reply_limit:

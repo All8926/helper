@@ -64,8 +64,8 @@ def personality_text(text, name):
     return text
 
 
-def _accepts_thinking(func):
-    """Mock 会吞掉关键字，所以看它真正调用的函数接不接 thinking。"""
+def _accepts(func, name):
+    """Mock 会吞掉关键字，所以看它真正调用的函数接不接这个参数。"""
     target = getattr(func, "side_effect", None)
     if not callable(target):
         target = func
@@ -73,16 +73,18 @@ def _accepts_thinking(func):
         parameters = inspect.signature(target).parameters
     except (TypeError, ValueError):
         return False
-    return any(item.kind == inspect.Parameter.VAR_KEYWORD or item.name == "thinking" for item in parameters.values())
+    return any(item.kind == inspect.Parameter.VAR_KEYWORD or item.name == name for item in parameters.values())
 
 
-def _complete(client, system, user, *, image=None, thinking=True):
-    """测试替身不一定接收思考开关，只在目标函数声明了该参数时传入。"""
+def _complete(client, system, user, *, image=None, thinking=True, search=False):
+    """测试替身不一定接收思考开关或联网开关，只在目标函数声明了该参数时传入。"""
     kwargs = {}
     if image is not None:
         kwargs["image"] = image
-    if _accepts_thinking(client.complete_json):
+    if _accepts(client.complete_json, "thinking"):
         kwargs["thinking"] = thinking
+    if search and _accepts(client.complete_json, "search"):
+        kwargs["search"] = True
     return client.complete_json(system, user, **kwargs)
 
 
@@ -94,11 +96,11 @@ class PersonalityLLM:
         self.guard = guard
         self.thinking = thinking is not False
 
-    def complete_json(self, system, user, image=None):
+    def complete_json(self, system, user, image=None, *, search=False):
         if not self.current():
             raise PersonalityExpired("人格已切换")
         prepared = system_with_personality(system, self.state, self.prompts, self.guard)
-        result = _complete(self.client, prepared, user, image=image, thinking=self.thinking)
+        result = _complete(self.client, prepared, user, image=image, thinking=self.thinking, search=search)
         if not self.current():
             raise PersonalityExpired("人格已切换")
         return result

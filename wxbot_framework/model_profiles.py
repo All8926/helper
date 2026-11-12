@@ -10,7 +10,7 @@ MAX_PROFILES = 12
 SYNTHETIC = {"llm": "current-llm", "tts": "current-tts"}
 FIELDS = {
     "llm": ("base_url", "model", "timeout_seconds", "max_tokens", "json_mode",
-            "token_limit_parameter", "extra_body"),
+            "token_limit_parameter", "extra_body", "web_search"),
     "tts": ("provider", "base_url", "model", "timeout_seconds", "default_voice", "max_chars_per_clip"),
 }
 
@@ -132,6 +132,9 @@ def _public(kind, item):
     view = {key: item[key] for key in FIELDS[kind] if key in item}
     view.update(id=item["id"], name=item["name"], api_key_configured=bool(item.get("api_key")),
                 api_key=item.get("api_key") or "")
+    if kind == "llm":
+        from .llm import public_web_search
+        view["web_search"] = public_web_search(item.get("web_search"))
     return view
 
 
@@ -153,7 +156,7 @@ def _merge(kind, base, incoming):
     if not incoming:
         return doc
     for key in FIELDS[kind]:
-        if key in incoming:
+        if key in incoming and key != "web_search":
             doc[key] = incoming[key]
     key = incoming.get("api_key", "")
     if not isinstance(key, str) or len(key) > 1024 or any(ord(char) < 32 for char in key):
@@ -168,7 +171,41 @@ def _merge(kind, base, incoming):
         if (doc.get("api_key") and not key.strip() and incoming.get("clear_api_key") is not True
                 and is_worldguide_url(base.get("base_url")) != is_worldguide_url(doc.get("base_url"))):
             raise ProfileError("切换 WorldGuide 接口时，请填写新接口的 API 密钥或清除已保存的密钥")
+    if kind == "llm":
+        doc["web_search"] = _merge_web_search(
+            base.get("web_search"),
+            incoming.get("web_search") if "web_search" in incoming else None,
+            incoming.get("clear_web_search_api_key") is True)
     return doc
+
+
+def _merge_web_search(previous, incoming, clear):
+    """空密钥表示保留原来的搜索密钥。清除开关单独生效。"""
+    from .llm import normalize_web_search
+    try:
+        stored = normalize_web_search(previous if isinstance(previous, dict) else None)
+    except ValueError as error:
+        raise ProfileError(str(error)) from error
+    if incoming is None and not clear:
+        return stored
+    if incoming is not None and not isinstance(incoming, dict):
+        raise ProfileError("web_search 应为 JSON 对象")
+    draft = dict(stored)
+    if isinstance(incoming, dict):
+        for key in ("enabled", "provider", "base_url", "timeout_seconds", "count"):
+            if key in incoming:
+                draft[key] = incoming[key]
+        key = incoming.get("api_key", "")
+        if not isinstance(key, str) or len(key) > 1024 or any(ord(char) < 32 for char in key):
+            raise ProfileError("搜索密钥格式不正确")
+        if key.strip():
+            draft["api_key"] = key.strip()
+    if clear:
+        draft["api_key"] = ""
+    try:
+        return normalize_web_search(draft)
+    except ValueError as error:
+        raise ProfileError(str(error)) from error
 
 
 def _overlay(existing, doc, kind):

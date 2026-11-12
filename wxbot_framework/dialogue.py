@@ -79,7 +79,7 @@ class Dialogue:
             system += _IMAGE
             body["image"] = True
         result = self.client.complete_json(system, json.dumps(body, ensure_ascii=False),
-                                           **({"image": image} if image else {}))
+                                           search=True, **({"image": image} if image else {}))
         if follow_up and (not isinstance(result, dict) or result.get("to_bot") is not True):
             return "", None
         reply = result.get("reply") if isinstance(result, dict) else None

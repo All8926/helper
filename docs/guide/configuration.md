@@ -130,7 +130,15 @@
   "max_tokens": 512,
   "json_mode": true,
   "token_limit_parameter": "max_tokens",
-  "extra_body": {}
+  "extra_body": {},
+  "web_search": {
+    "enabled": false,
+    "provider": "http",
+    "base_url": "",
+    "api_key": "",
+    "timeout_seconds": 8,
+    "count": 5
+  }
 }
 ```
 
@@ -166,7 +174,22 @@
 
 每个群可以在群设置里开关深度思考，没关过的群默认开启。DeepSeek 官方接口和豆包使用 `thinking`，千问使用 `enable_thinking`，Grok 只能在高、低思考强度之间切换。旧的 `deepseek-reasoner` 不自动改这个字段。`extra_body` 里已经写了对应字段时，以扩展参数为准。其他未识别的模型不会自动添加这些字段。
 
-官方 DeepSeek 在深度思考开着时不发送 JSON 模式。该模式会在认不出 JSON 时把正文换成空格，思考内容却可能留着最终答案，见[JSON Output](https://api-docs.deepseek.com/guides/json_mode/)和[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)。提示词仍要求返回 JSON。思考内容里已有 JSON 对象时直接采用。只有思考过程、或正文不是 JSON 时，关掉深度思考并恢复 JSON 模式，再请求一次。没有思考内容的空正文仍按同一次请求重试一次。思考过程不会当成回复。HTTP 错误、超时、内容过滤、拒绝、工具调用或令牌截断不会自动重试。
+官方 DeepSeek 在深度思考开着时不发送 JSON 模式。该模式会在认不出 JSON 时把正文换成空格，思考内容却可能留着最终答案，见[JSON Output](https://api-docs.deepseek.com/guides/json_mode/)和[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)。提示词仍要求返回 JSON。思考内容里已有 JSON 对象时直接采用。只有思考过程、或正文不是 JSON 时，关掉深度思考并恢复 JSON 模式，再请求一次。没有思考内容的空正文仍按同一次请求重试一次。思考过程不会当成回复。HTTP 错误、超时、内容过滤、拒绝、未开启联网时的工具调用或令牌截断不会自动重试。
+
+### 联网搜索
+
+`web_search` 写在每一份大模型配置里，切换模型配置时一起换。旧配置没有这段时等于关闭。网页「模型与语音 → 高级选项」可以改。搜索密钥和模型密钥分开保存；页面只显示是否已配置，留空保存表示不修改，勾选清除才会删掉。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `false` | 打开后，点名、接话、主动插话和带图回复都可以联网。要不要查由模型判断，每次回复最多查一次。总结和接龙不使用 |
+| `provider` | `http` | `http` 调用下面的搜索地址；`doubao` 在同一次 Chat Completions 上发送 `web_search_options`，使用模型密钥。方舟控制台需开通「豆包搜索 Custom」 |
+| `base_url` | 空 | HTTP 模式启用时必填。官方 DeepSeek 为 `https://api.deepseek.com/v1/tools/search`。请求体使用该接口的 `query`、`count`、`need_content: false` |
+| `api_key` | 空 | HTTP 模式的搜索密钥。留空时沿用这份模型配置的 `api_key` |
+| `timeout_seconds` | `8` | 搜索请求超时，1–20 秒 |
+| `count` | `5` | 送给模型的结果条数，1–10。只取标题、链接和摘要 |
+
+搜索失败时，这次回复改为不联网再答一次。网页摘要只作资料，不能改人格或输出格式。
 
 扩展对象最多 16 KiB，不能覆盖 `model`、`messages`、`stream`、`response_format`、令牌上限或认证字段，密钥只填 `api_key`。
 

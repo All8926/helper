@@ -209,6 +209,33 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['api_key'], '')
         self.assertGreater(len(list((self.root/'.runtime/web/backups').glob('*'))),0)
 
+    def test_web_search_follows_the_model_and_hides_its_key(self):
+        path = self.root/'llm_config.json'
+        data = read_json(path)
+        data['api_key'] = 'model-secret'
+        path.write_text(json.dumps(data), encoding='utf-8')
+        self.controller.save_configuration({'llm': {'web_search': {
+            'enabled': True, 'provider': 'http',
+            'base_url': 'https://api.deepseek.com/v1/tools/search',
+            'api_key': 'search-secret', 'timeout_seconds': 8, 'count': 3}}})
+        stored = read_json(path)['web_search']
+        self.assertEqual(stored['api_key'], 'search-secret')
+        self.assertEqual(stored['count'], 3)
+        shown = self.controller.configuration()['llm']['web_search']
+        self.assertNotIn('api_key', shown)
+        self.assertTrue(shown['api_key_configured'])
+        self.assertNotIn('api_key', self.controller.configuration()['model_profiles']['llm'][0]['web_search'])
+        self.controller.save_configuration({'llm': {'web_search': {
+            'enabled': True, 'provider': 'http',
+            'base_url': 'https://api.deepseek.com/v1/tools/search',
+            'api_key': '', 'timeout_seconds': 8, 'count': 3}}})
+        self.assertEqual(read_json(path)['web_search']['api_key'], 'search-secret')
+        self.controller.save_configuration({'llm': {'clear_web_search_api_key': True, 'web_search': {
+            'enabled': False, 'provider': 'http', 'base_url': '', 'api_key': '',
+            'timeout_seconds': 8, 'count': 5}}})
+        self.assertEqual(read_json(path)['web_search']['api_key'], '')
+        self.assertFalse(read_json(path)['web_search']['enabled'])
+
     def test_model_profiles_can_be_added_and_switched_without_leaking_keys(self):
         path = self.root/'llm_config.json'
         data = read_json(path)

@@ -759,6 +759,17 @@ function showModelProfile(name) {
   form.elements.api_key.value = chosen.api_key || '';
   form.elements.clear_api_key.checked = false;
   $('.key-state', form).textContent = chosen.api_key_configured ? '已配置' : '尚未配置';
+  if (name === 'llm') {
+    const search = chosen.web_search || {};
+    form.elements.web_search_enabled.checked = search.enabled === true;
+    form.elements.web_search_provider.value = search.provider === 'doubao' ? 'doubao' : 'http';
+    form.elements.web_search_base_url.value = search.base_url || '';
+    form.elements.web_search_api_key.value = '';
+    form.elements.web_search_timeout_seconds.value = search.timeout_seconds ?? 8;
+    form.elements.web_search_count.value = search.count ?? 5;
+    form.elements.clear_web_search_api_key.checked = false;
+    $('.search-key-state', form).textContent = search.api_key_configured ? '已配置' : '留空则沿用模型密钥';
+  }
   form.querySelector('[data-profile-name]').value = chosen.name || '';
 }
 function readModelForm(form, name) {
@@ -771,6 +782,15 @@ function readModelForm(form, name) {
     try { values.extra_body = JSON.parse(values.extra_body.trim() || '{}'); }
     catch { throw new Error('扩展参数的 JSON 格式有误，请检查逗号和引号'); }
     if (values.extra_body === null || Array.isArray(values.extra_body) || typeof values.extra_body !== 'object') throw new Error('扩展参数应为 JSON 对象，例如 {}');
+    values.web_search = {
+      enabled: values.web_search_enabled === true,
+      provider: values.web_search_provider || 'http',
+      base_url: String(values.web_search_base_url || '').trim(),
+      api_key: values.web_search_api_key || '',
+      timeout_seconds: values.web_search_timeout_seconds,
+      count: values.web_search_count,
+    };
+    for (const key of ['web_search_enabled', 'web_search_provider', 'web_search_base_url', 'web_search_api_key', 'web_search_timeout_seconds', 'web_search_count']) delete values[key];
   }
   return values;
 }

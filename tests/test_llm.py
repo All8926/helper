@@ -278,7 +278,8 @@ class LLMTests(unittest.TestCase):
                 self.assertNotIn("private-provider-detail", str(caught.exception))
 
     def test_extension_cannot_override_protocol_or_authentication_fields(self):
-        for key in ("model", "messages", "stream", "response_format", "max_tokens", "max_completion_tokens", "api_key", "Authorization"):
+        for key in ("model", "messages", "stream", "response_format", "max_tokens", "max_completion_tokens",
+                    "tools", "web_search_options", "api_key", "Authorization"):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "不能覆盖"):
                 LLMClient({**self.options, "extra_body": {key: "forbidden"}})
 
@@ -340,6 +341,99 @@ class LLMTests(unittest.TestCase):
         with patch("wxbot_framework.llm.urlopen", return_value=io.BytesIO(b'{"choices":[null]}')):
             with self.assertRaises(LLMError):
                 self.client.complete_json("JSON", "测试")
+
+    def _search(self, **overrides):
+        settings = {"enabled": True, "provider": "http",
+                    "base_url": "https://search.example.test/v1/tools/search",
+                    "api_key": "search-key", "timeout_seconds": 8, "count": 2}
+        settings.update(overrides)
+        return LLMClient({**self.options, "web_search": settings})
+
+    def test_closed_search_does_not_add_tools(self):
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{"reply":"好"}')) as call:
+            self.assertEqual(self.client.complete_json("规则", "问题", search=True), {"reply": "好"})
+        body = json.loads(call.call_args.args[0].data)
+        self.assertNotIn("tools", body)
+        self.assertNotIn("web_search_options", body)
+        self.assertNotIn("web_search", body["messages"][0]["content"])
+
+    def test_http_search_runs_once_and_returns_reasoning(self):
+        client = self._search()
+        tool = {"choices": [{"finish_reason": "tool_calls", "message": {
+            "content": "", "reasoning_content": "先查一下",
+            "tool_calls": [{"id": "call_1", "type": "function",
+                            "function": {"name": "web_search", "arguments": '{"query":"今天新闻"}'}}]}}]}
+        found = {"results": [{"title": "标题", "url": "https://example.com/a", "summary": "摘要"}]}
+        final = {"choices": [{"finish_reason": "stop", "message": {"content": '{"reply":"结果"}'}}]}
+        bodies = [json.dumps(item).encode() for item in (tool, found, final)]
+        with patch("wxbot_framework.llm.urlopen", side_effect=[io.BytesIO(body) for body in bodies]) as call:
+            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "结果"})
+        self.assertEqual([item.args[0].full_url for item in call.call_args_list], [
+            "https://api.deepseek.com/chat/completions",
+            "https://search.example.test/v1/tools/search",
+            "https://api.deepseek.com/chat/completions"])
+        self.assertEqual(call.call_args_list[1].args[0].get_header("Authorization"), "Bearer search-key")
+        first, search_body, second = [json.loads(item.args[0].data) for item in call.call_args_list]
+        self.assertEqual(first["tools"][0]["function"]["name"], "web_search")
+        self.assertNotIn("response_format", first)
+        self.assertEqual(search_body["query"], "今天新闻")
+        self.assertEqual(search_body["count"], 2)
+        self.assertFalse(search_body["need_content"])
+        self.assertNotIn("tools", second)
+        self.assertEqual(second["messages"][2]["reasoning_content"], "先查一下")
+        self.assertIn("摘要", second["messages"][3]["content"])
+
+    def test_blank_search_key_reuses_the_model_key(self):
+        client = self._search(api_key="")
+        tool = {"choices": [{"finish_reason": "tool_calls", "message": {
+            "content": None, "tool_calls": [{"id": "call_1", "type": "function",
+                                             "function": {"name": "web_search", "arguments": '{"query":"天气"}'}}]}}]}
+        found = {"results": [{"title": "天气", "url": "https://example.com/w", "snippet": "晴"}]}
+        final = {"choices": [{"message": {"content": '{"reply":"晴"}'}}]}
+        bodies = [io.BytesIO(json.dumps(item).encode()) for item in (tool, found, final)]
+        with patch("wxbot_framework.llm.urlopen", side_effect=bodies) as call:
+            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "晴"})
+        self.assertEqual(call.call_args_list[1].args[0].get_header("Authorization"), "Bearer dummy-test-key")
+
+    def test_search_transport_failure_retries_without_search(self):
+        client = self._search()
+        tool = {"choices": [{"finish_reason": "tool_calls", "message": {
+            "tool_calls": [{"id": "call_1", "type": "function",
+                            "function": {"name": "web_search", "arguments": '{"query":"新闻"}'}}]}}]}
+
+        def respond(request, timeout):
+            if request.full_url.endswith("/search"):
+                raise URLError("down")
+            body = json.loads(request.data)
+            if "tools" in body:
+                return io.BytesIO(json.dumps(tool).encode())
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"reply":"不联网"}'}}]}).encode())
+
+        with patch("wxbot_framework.llm.urlopen", side_effect=respond) as call:
+            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "不联网"})
+        self.assertEqual(call.call_count, 3)
+        self.assertNotIn("tools", json.loads(call.call_args_list[-1].args[0].data))
+        self.assertNotIn("web_search", json.loads(call.call_args_list[-1].args[0].data)["messages"][0]["content"])
+
+    def test_doubao_search_uses_the_chat_request_and_falls_back(self):
+        client = LLMClient({**self.options, "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+                            "model": "doubao-seed-2-0-lite",
+                            "web_search": {"enabled": True, "provider": "doubao"}})
+
+        def respond(request, timeout):
+            body = json.loads(request.data)
+            if "web_search_options" in body:
+                self.assertNotIn("tools", body)
+                raise HTTPError(request.full_url, 400, "closed", {}, None)
+            self.assertNotIn("web_search_options", body)
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"reply":"好"}'}}]}).encode())
+
+        with patch("wxbot_framework.llm.urlopen", side_effect=respond):
+            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "好"})
+
+    def test_http_search_requires_a_url_when_enabled(self):
+        with self.assertRaisesRegex(ValueError, "base_url"):
+            self._search(base_url="", api_key="")
 
 
 class JudgeTests(unittest.TestCase):
