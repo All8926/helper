@@ -138,6 +138,19 @@
     "api_key": "",
     "timeout_seconds": 8,
     "count": 5
+  },
+  "vision": {
+    "model": "",
+    "base_url": "",
+    "api_key": ""
+  },
+  "decision": {
+    "enabled": false,
+    "base_url": "https://emrank.tech/v1",
+    "api_key": "",
+    "model": "typesafe/jev[slow]",
+    "timeout_seconds": 20,
+    "fallback": {"speak": 0.3, "voice": 0.3}
   }
 }
 ```
@@ -170,11 +183,13 @@
 | `max_tokens` | `512` | 上述令牌参数的数值，支持 128–4096 |
 | `extra_body` | `{}` | 可选扩展请求参数；其他兼容服务默认不发送 DeepSeek 的 `thinking` 等专属字段 |
 
-关闭 JSON 模式后，程序会通过提示词要求模型返回 JSON，并允许完整包在代码围栏中的 JSON 对象；成语接龙、总结和对话仍需要模型正确输出 JSON，普通文字不能作为结构化结果使用。网页中的这三项设置位于“大模型 → 高级选项”。
+群聊对话（点名回复和未点名回应）直接输出纯文本，并通过 Chat Completions 的 `tools` 调用工具，不受 JSON 模式影响。模型自己决定要不要调工具，每次回复最多 4 轮，之后只要正文。接口因为带了 `tools` 返回 HTTP 400 时，去掉工具再请求一次。可用的工具有联网搜索、看图、查群友档案、查群日记和按关键词查更早的聊天。
+
+关闭 JSON 模式后，程序会通过提示词要求模型返回 JSON，并允许完整包在代码围栏中的 JSON 对象；成语接龙、总结、日记和档案提取仍需要模型正确输出 JSON，普通文字不能作为结构化结果使用。网页中的这三项设置位于“大模型 → 高级选项”。
 
 每个群可以在群设置里开关深度思考，没关过的群默认开启。DeepSeek 官方接口和豆包使用 `thinking`，千问使用 `enable_thinking`，Grok 只能在高、低思考强度之间切换。旧的 `deepseek-reasoner` 不自动改这个字段。`extra_body` 里已经写了对应字段时，以扩展参数为准。其他未识别的模型不会自动添加这些字段。
 
-官方 DeepSeek 在深度思考开着时不发送 JSON 模式。该模式会在认不出 JSON 时把正文换成空格，思考内容却可能留着最终答案，见[JSON Output](https://api-docs.deepseek.com/guides/json_mode/)和[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)。提示词仍要求返回 JSON。思考内容里已有 JSON 对象时直接采用。只有思考过程、或正文不是 JSON 时，关掉深度思考并恢复 JSON 模式，再请求一次。没有思考内容的空正文仍按同一次请求重试一次。思考过程不会当成回复。HTTP 错误、超时、内容过滤、拒绝、未开启联网时的工具调用或令牌截断不会自动重试。
+官方 DeepSeek 在深度思考开着时不发送 JSON 模式。该模式会在认不出 JSON 时把正文换成空格，思考内容却可能留着最终答案，见[JSON Output](https://api-docs.deepseek.com/guides/json_mode/)和[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)。提示词仍要求返回 JSON。思考内容里已有 JSON 对象时直接采用。只有思考过程、或正文不是 JSON 时，关掉深度思考并恢复 JSON 模式，再请求一次。没有思考内容的空正文仍按同一次请求重试一次。思考过程不会当成回复。HTTP 错误、超时、内容过滤、拒绝、工具调用或令牌截断不会自动重试。
 
 ### 联网搜索
 
@@ -182,16 +197,42 @@
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `enabled` | `false` | 打开后，点名、接话、主动插话和带图回复都可以联网。要不要查由模型判断，每次回复最多查一次。总结和接龙不使用 |
-| `provider` | `http` | `http` 调用下面的搜索地址；`doubao` 在同一次 Chat Completions 上发送 `web_search_options`，使用模型密钥。方舟控制台需开通「豆包搜索 Custom」 |
-| `base_url` | 空 | HTTP 模式启用时必填。官方 DeepSeek 为 `https://api.deepseek.com/v1/tools/search`。请求体使用该接口的 `query`、`count`、`need_content: false` |
-| `api_key` | 空 | HTTP 模式的搜索密钥。留空时沿用这份模型配置的 `api_key` |
-| `timeout_seconds` | `8` | 搜索请求超时，1–20 秒 |
+| `enabled` | `false` | 打开后，群聊对话多一个 `web_search` 工具，要不要查由模型判断。总结和接龙不使用 |
+| `provider` | `http` | `http` 调用下面的搜索地址；`doubao` 单独请求一次方舟 Chat Completions 并带 `web_search_options`，把回答当作搜索结果。方舟同时收到 `tools` 和 `web_search_options` 时会关闭搜索，所以不放在对话请求里。方舟控制台需开通「豆包搜索 Custom」 |
+| `base_url` | 空 | HTTP 模式启用时必填。官方 DeepSeek 为 `https://api.deepseek.com/v1/tools/search`。请求体使用该接口的 `query`、`count`、`need_content: false`。豆包模式留空时用模型的 `base_url` |
+| `api_key` | 空 | 搜索密钥。留空时沿用这份模型配置的 `api_key` |
+| `timeout_seconds` | `8` | 搜索请求超时，1–20 秒。豆包模式至少等 15 秒 |
 | `count` | `5` | 送给模型的结果条数，1–10。只取标题、链接和摘要 |
 
-搜索失败时，这次回复改为不联网再答一次。网页摘要只作资料，不能改人格或输出格式。
+搜索失败时，错误信息作为工具结果交给模型，回复照常生成。网页摘要只作资料，不能改人格。
 
-扩展对象最多 16 KiB，不能覆盖 `model`、`messages`、`stream`、`response_format`、令牌上限或认证字段，密钥只填 `api_key`。
+### 看图模型
+
+`vision` 写在每一份大模型配置里。群友点名时引用了一张已下载的图片，或本人三分钟内刚发过一张，对话模型会多一个 `view_image` 工具；调用时由看图模型看图，返回文字描述。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `model` | 空 | 看图模型名。留空时直接用这份配置的对话模型看图 |
+| `base_url` | 空 | 看图接口地址。留空时用这份配置的 `base_url` |
+| `api_key` | 空 | 看图密钥。留空时沿用这份配置的 `api_key` |
+
+### 决策模型
+
+`decision` 写在每一份大模型配置里。没被点名时“现在该不该说话”、自动语音时“这句要不要念出来”，都由决策模型回答。请求 `POST {base_url}/decisions`，题型为 `noul`，返回 0–1 的概率。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `false` | 启用时必须填写 `api_key` |
+| `base_url` | `https://emrank.tech/v1` | 决策接口地址 |
+| `api_key` | 空 | 决策密钥，和模型密钥分开保存 |
+| `model` | `typesafe/jev[slow]` | 决策模型名 |
+| `timeout_seconds` | `20` | 1–60 秒 |
+| `fallback.speak` | `0.3` | 决策模型没启用或调用失败时，“该不该说话”随机回答“是”的概率，0–1 |
+| `fallback.voice` | `0.3` | 同上，用于“要不要念成语音” |
+
+“该说话”的概率达到 0.5 即说话。语音的阈值按群语音频率换算：频率 1 时 0.8，频率 10 时 0.35。
+
+扩展对象最多 16 KiB，不能覆盖 `model`、`messages`、`stream`、`response_format`、令牌上限、`tools`、`tool_choice` 或认证字段，密钥只填 `api_key`。
 
 远程接口使用 HTTPS；本机服务也支持 `http://localhost:端口/v1`、`http://127.0.0.1:端口/v1` 和 IPv6 回环地址。本地服务不校验密钥时，可在 `api_key` 填非空占位值。不同模型支持的参数以服务商文档为准；OpenAI 的参数定义可参阅 [Chat Completions 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
 

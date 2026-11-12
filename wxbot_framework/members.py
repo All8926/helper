@@ -741,14 +741,23 @@ class MemberStore:
         return (setting.get("context_hours", DEFAULT_CONTEXT_HOURS),
                 setting.get("context_limit", DEFAULT_CONTEXT_LIMIT))
 
-    def room_activity(self, room):
-        """0–10。没写时看旧的主动插话开关。"""
-        from .room_behavior import BehaviorError, normalize_activity
+    def room_unnamed_reply(self, room):
+        """本群是否开启未点名回应。没写时看旧的活跃度和主动插话开关。"""
+        from .room_behavior import BehaviorError, normalize_unnamed_reply
         setting = self.room_settings.get(room) or {}
         try:
-            return normalize_activity(setting.get("activity"), setting.get("proactive_enabled"))
+            return normalize_unnamed_reply(setting.get("unnamed_reply"), setting)
         except BehaviorError:
-            return 0
+            return False
+
+    def room_hourly_limit(self, room):
+        """未点名回应每小时按节拍最多说几句。"""
+        from .room_behavior import BehaviorError, DEFAULT_HOURLY_LIMIT, normalize_hourly_limit
+        setting = self.room_settings.get(room) or {}
+        try:
+            return normalize_hourly_limit(setting.get("hourly_limit"))
+        except BehaviorError:
+            return DEFAULT_HOURLY_LIMIT
 
     def room_voice_rate(self, room):
         """自动语音的频率，1–10。没写时是 5。"""
@@ -760,7 +769,7 @@ class MemberStore:
             return DEFAULT_VOICE_RATE
 
     def room_glance_minutes(self, room):
-        """群里在聊时隔几分钟让模型看一眼，0 表示不看。"""
+        """未点名回应隔几分钟看一眼群，0 表示不按节拍看。"""
         from .room_behavior import BehaviorError, DEFAULT_GLANCE_MINUTES, normalize_glance_minutes
         setting = self.room_settings.get(room) or {}
         try:
@@ -776,23 +785,6 @@ class MemberStore:
             return normalize_deep_thinking(setting.get("deep_thinking"))
         except BehaviorError:
             return True
-
-    def proactive_bias(self, room):
-        """本群主动插话门槛学到的修正，正数表示群友不太欢迎插话。重启后保留。"""
-        with self._lock:
-            row = self._connection().execute("SELECT bias FROM room_proactive WHERE account=? AND room=?",
-                                              (self.account, room)).fetchone()
-            return row[0] if row else 0.0
-
-    def shift_proactive_bias(self, room, delta, low, high):
-        """按群友反馈调整修正值，夹在 low 与 high 之间，返回调整后的值。"""
-        with self._lock, self._connection() as db:
-            row = db.execute("SELECT bias FROM room_proactive WHERE account=? AND room=?",
-                             (self.account, room)).fetchone()
-            value = round(min(max((row[0] if row else 0.0) + delta, low), high), 3)
-            db.execute("""INSERT INTO room_proactive VALUES(?,?,?)
-                ON CONFLICT(account,room) DO UPDATE SET bias=excluded.bias""", (self.account, room, value))
-            return value
 
     def bot_said(self, room, text, limit=50):
         """被引用的文字是不是机器人最近在本群说过的话。微信引用里不带作者 ID，只能比对正文。"""
@@ -978,6 +970,37 @@ class MemberStore:
                     "age_seconds": self._line_age(row["received_at"]),
                 })
         return chosen[-max(1, int(limit)):]
+
+    def search_room_lines(self, room, keyword, days, limit=20):
+        """按关键词查本群最近几天的聊天，从旧到新。跳过指令和探测消息。"""
+        from .summary import CONTROL
+        from .text import own_group_command
+
+        keyword = " ".join(str(keyword or "").split())[:50]
+        if not keyword or not self.history_enabled or room not in self.groups:
+            return []
+        cutoff = (self._now() - timedelta(days=min(max(int(days), 1), 30))).astimezone(timezone.utc).isoformat()
+        pattern = "%" + keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._lock:
+            rows = self._connection().execute(
+                """SELECT sender_id, text, received_at, bot_generated FROM messages
+                   WHERE account=? AND room=? AND received_at>=? AND text LIKE ? ESCAPE '\\'
+                   ORDER BY id DESC LIMIT ?""",
+                (self.account, room, cutoff, pattern, max(1, int(limit)) * 3),
+            ).fetchall()
+            chosen = []
+            for row in rows:
+                text = " ".join((row["text"] or "").split())
+                if not text or "WXBOT_AT_CHAT_PROBE" in text or own_group_command(text):
+                    continue
+                if text.split(maxsplit=1)[0] in CONTROL:
+                    continue
+                chosen.append({"received_at": row["received_at"], "text": text[:200],
+                               "speaker": self._context_speaker(room, row["sender_id"], row["bot_generated"])})
+                if len(chosen) >= limit:
+                    break
+        chosen.reverse()
+        return chosen
 
     def _line_age(self, received_at):
         try:

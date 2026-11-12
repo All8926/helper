@@ -1,14 +1,19 @@
-"""主动插话与接话识别：本地先算开口意愿分，过了本群门槛才问模型；群里在聊时定时让模型看一眼。"""
+"""未点名回应：对话还热时等安静再判断，平时按看群间隔看一眼；该不该说由决策模型定，说什么由对话模型写。"""
+import io
+import json
 import time
 import unittest
 from datetime import timedelta
-from unittest.mock import Mock
+from unittest.mock import patch
 
 from PIL import Image
 
 import test_chat_summary as daily
+from fake_llm import FakeLLM
 from plugins.mention_chat import Plugin
 from wxbot_framework import proactive as pro
+from wxbot_framework.chat_tools import chat_tools
+from wxbot_framework.dialogue import voice_threshold
 from wxbot_framework.llm import LLMError
 from wxbot_framework.room_behavior import BehaviorError, normalize_reply_limit, normalize_room_setting
 from wxbot_framework.sdk import Message
@@ -18,95 +23,68 @@ ROOM, CAT, ROBOT, OTHER = daily.ROOM, daily.CAT, daily.ROBOT, daily.OTHER
 
 
 class FilterTests(unittest.TestCase):
-    def test_score_follows_need_and_drops_when_bot_just_spoke(self):
-        quiet = [{"sender_id": CAT, "text": "哈哈", "bot": False, "id": 1}]
-        self.assertEqual(pro.willingness("哈哈", quiet, bot_id=ROBOT), (0.0, ""))
-        asked, reason = pro.willingness("这个怎么弄？", quiet, bot_id=ROBOT)
-        self.assertEqual(reason, "question")
-        helped, _ = pro.willingness("求助，这个怎么弄？", quiet, bot_id=ROBOT)
-        self.assertGreater(helped, asked)
-        fight = [{"sender_id": CAT, "text": "你闭嘴", "bot": False, "id": 1},
-                 {"sender_id": OTHER, "text": "你才废物", "bot": False, "id": 2}]
-        self.assertEqual(pro.willingness("行吧", fight, bot_id=ROBOT)[1], "mediate")
-        short = [{"sender_id": CAT, "text": "有人知道吗", "bot": False, "id": 4, "age_seconds": 20}]
-        long = [dict(short[0], age_seconds=120)]
-        self.assertGreater(pro.willingness("我到了", long, current_id=9, bot_id=ROBOT)[0],
-                           pro.willingness("我到了", short, current_id=9, bot_id=ROBOT)[0])
-        after_bot = quiet + [{"sender_id": ROBOT, "text": "我在", "bot": True, "id": 2}]
-        self.assertLess(pro.willingness("这个怎么弄？", after_bot, bot_id=ROBOT)[0], asked - 0.3)
-
-    def test_activity_sets_share_and_bar(self):
-        self.assertAlmostEqual(pro.target_share(1), 0.01)
-        self.assertAlmostEqual(pro.target_share(10), 0.15)
-        self.assertAlmostEqual(pro.speak_bar(1, 1.0), 0.70)
-        self.assertAlmostEqual(pro.speak_bar(10, 2.0), 0.25)
-        self.assertAlmostEqual(pro.speak_bar(5, 0.0), 0.90)
-        self.assertAlmostEqual(pro.speak_bar(5, 1.0, 0.2), 0.70)
-        self.assertEqual(pro.glance_interval(2), 120)
-        self.assertEqual(pro.glance_interval(2, 0.4), 360)
-
     def test_settings_default_and_validate(self):
-        self.assertEqual(normalize_room_setting({}, [])["activity"], 0)
-        self.assertEqual(normalize_room_setting({"proactive_enabled": True}, [])["activity"], 5)
-        self.assertEqual(normalize_room_setting({}, [])["glance_minutes"], 2)
-        self.assertEqual(normalize_room_setting({}, [])["voice_rate"], 5)
+        default = normalize_room_setting({}, [])
+        self.assertFalse(default["unnamed_reply"])
+        self.assertEqual((default["glance_minutes"], default["hourly_limit"], default["voice_rate"]), (2, 3, 5))
+        self.assertNotIn("activity", default)
+        self.assertTrue(normalize_room_setting({"activity": 4}, [])["unnamed_reply"])
+        self.assertFalse(normalize_room_setting({"activity": 0}, [])["unnamed_reply"])
+        self.assertTrue(normalize_room_setting({"proactive_enabled": True}, [])["unnamed_reply"])
+        self.assertFalse(normalize_room_setting({"unnamed_reply": False, "activity": 9}, [])["unnamed_reply"])
+        self.assertEqual(normalize_room_setting({"glance_minutes": 0, "hourly_limit": 0}, [])["hourly_limit"], 0)
         self.assertEqual(normalize_room_setting({"voice_rate": 9}, [])["voice_rate"], 9)
-        self.assertTrue(normalize_room_setting({}, [])["deep_thinking"])
+        self.assertTrue(default["deep_thinking"])
         self.assertFalse(normalize_room_setting({"deep_thinking": False}, [])["deep_thinking"])
-        self.assertEqual(normalize_room_setting({"glance_minutes": 0}, [])["glance_minutes"], 0)
         self.assertEqual(normalize_reply_limit(None), 600)
         self.assertEqual(normalize_reply_limit(8000), 8000)
         for bad in (0, 8001, True, 1.5, "600"):
             with self.assertRaises(BehaviorError):
                 normalize_reply_limit(bad)
-        for bad in ({"activity": 11}, {"glance_minutes": 61}, {"voice_rate": 0}, {"deep_thinking": "yes"}):
-            with self.assertRaises(BehaviorError):
+        for bad in ({"unnamed_reply": "yes"}, {"glance_minutes": 61}, {"hourly_limit": 31}, {"hourly_limit": True},
+                    {"voice_rate": 0}, {"deep_thinking": "yes"}):
+            with self.subTest(bad=bad), self.assertRaises(BehaviorError):
                 normalize_room_setting(bad, [])
 
-    def test_budget_feedback_and_mute(self):
-        gate = pro.ProactiveGate()
-        gate.earn(ROOM, 5)
-        self.assertEqual(gate.tokens(ROOM), pro.BUDGET_CAP)
-        gate.mark(ROOM, now=0)
-        self.assertEqual(gate.tokens(ROOM), pro.BUDGET_CAP - 1)
-        self.assertFalse(gate.allow(ROOM, 0, now=30))
-        self.assertTrue(gate.allow(ROOM, 0, now=61))
-        self.assertFalse(gate.settle(ROOM, now=100))
-        self.assertTrue(gate.settle(ROOM, now=181))
-        self.assertFalse(gate.settle(ROOM, now=400))
-        gate.mark(ROOM, now=500)
-        self.assertTrue(gate.engaged(ROOM))
-        self.assertFalse(gate.engaged(ROOM))
-        gate.mute(ROOM, now=600)
-        self.assertFalse(gate.allow(ROOM, 0, now=700))
-        self.assertTrue(gate.allow(ROOM, 0, now=4201))
-        recent = [{"sender_id": ROBOT, "text": "我来说两句", "bot": True, "id": 1}]
-        self.assertTrue(pro.annoyed("闭嘴吧你", recent, 2, ROBOT))
-        self.assertFalse(pro.annoyed("闭嘴吧你", [{"sender_id": OTHER, "text": "哈", "id": 1}], 2, ROBOT))
+    def test_hot_window_waits_for_quiet_and_mentions_cancel_it(self):
+        listener = pro.RoomListener()
+        listener.heard(ROOM, now=0)
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=1, quiet=True, now=10))
+        listener.bot_spoke(ROOM, now=100)
+        listener.heard(ROOM, now=150)
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=2, quiet=False, now=153))
+        self.assertEqual(listener.take(ROOM, minutes=0, limit=0, last_id=2, quiet=False, now=157), "hot")
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=2, quiet=True, now=160))
+        listener.heard(ROOM, now=200)
+        listener.addressed(ROOM)
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=3, quiet=True, now=210))
+        listener.heard(ROOM, now=100 + pro.HOT_SECONDS + 1)
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=4, quiet=True, now=400))
 
-    def test_follow_up_window_and_turn_limit(self):
-        sessions = pro.FollowUps()
-        sessions.open(ROOM, CAT, now=0)
-        self.assertTrue(sessions.active(ROOM, CAT, now=100))
-        self.assertFalse(sessions.active(ROOM, CAT, now=200))
-        for moment in range(5):
-            sessions.advance(ROOM, CAT, now=moment)
-        self.assertFalse(sessions.active(ROOM, CAT, now=10))
-        self.assertTrue(sessions.exhausted(ROOM, CAT, now=10))
-        recent = [{"sender_id": ROBOT, "text": "火锅", "bot": True, "id": 1, "age_seconds": 30}]
-        self.assertTrue(pro.addresses_bot("你推荐哪家", recent, 2, ROBOT))
-        self.assertFalse(pro.addresses_bot("我推荐哪家", recent, 2, ROBOT))
-        self.assertEqual(pro.clean_reply("不说。"), "")
-        self.assertEqual(len(pro.clean_reply("啊" * 100)), 100)
+    def test_beat_needs_interval_new_quiet_lines_and_room_in_the_hourly_limit(self):
+        listener = pro.RoomListener()
+        take = lambda now, last_id=1, quiet=True, limit=1, minutes=2: listener.take(
+            ROOM, minutes=minutes, limit=limit, last_id=last_id, quiet=quiet, now=now)
+        self.assertIsNone(take(0))
+        self.assertIsNone(take(119, last_id=2))
+        self.assertIsNone(take(121))
+        self.assertIsNone(take(121, last_id=2, quiet=False))
+        self.assertIsNone(take(121, last_id=None))
+        self.assertIsNone(take(121, last_id=2, minutes=0))
+        self.assertEqual(take(121, last_id=2), "beat")
+        listener.bot_spoke(ROOM, beat=True, now=121)
+        listener.bot_spoke(ROOM, now=200)
+        self.assertIsNone(take(300, last_id=3))
+        self.assertEqual(take(300, last_id=3, limit=2), "beat")
+        self.assertEqual(take(121 + pro.HOUR, last_id=4), "beat")
 
-    def test_glance_needs_fresh_lines_while_chat_is_live(self):
-        lines = [{"sender_id": CAT, "text": "去爬山", "id": 1, "age_seconds": 40},
-                 {"sender_id": OTHER, "text": "好啊", "id": 2, "age_seconds": 30}]
-        self.assertTrue(pro.glance_due(lines, ROBOT, None))
-        self.assertFalse(pro.glance_due(lines, ROBOT, 2))
-        self.assertFalse(pro.glance_due([dict(row, age_seconds=200) for row in lines], ROBOT, None))
-        self.assertFalse(pro.glance_due(lines + [{"sender_id": ROBOT, "text": "我也去", "bot": True, "id": 3,
-                                                  "age_seconds": 10}], ROBOT, None))
+    def test_reply_cleanup_and_voice_threshold(self):
+        self.assertEqual(pro.clean_reply("  试试\n先重启 "), "试试 先重启")
+        self.assertEqual(pro.clean_reply(None), "")
+        self.assertEqual(voice_threshold(1), 0.8)
+        self.assertEqual(voice_threshold(5), 0.6)
+        self.assertEqual(voice_threshold(10), 0.35)
+        self.assertEqual(voice_threshold(99), 0.35)
 
 
 class PluginTests(unittest.TestCase):
@@ -121,25 +99,24 @@ class PluginTests(unittest.TestCase):
             plugin.on_unload(self.ctx)
         daily.DailySummaryTests.tearDown(self)
 
-    def start(self, activity=5, **setting):
-        self.store.room_settings[ROOM] = {"activity": activity, **setting}
+    def start(self, unnamed=True, speak=1.0, decision=None, **setting):
+        # 夹具默认停在北京时间午夜前一秒，往后拨时钟会触发每日清理。
+        self.now = self.now.replace(hour=4)
+        self.store.room_settings[ROOM] = {"unnamed_reply": unnamed, **setting}
         self.backend.capabilities = ("text.quote.send",)
         self.backend.send_quote_text = lambda room, original_id, text: self.backend.sent.append((room, text, original_id)) or True
         self.backend.send_at_text = lambda room, text, ids: self.backend.sent.append((room, text, ids)) or True
-        self.interject = {"reply": "我帮你看一眼", "quote": False}
-        self.follow = {"to_bot": True, "reply": "明天也行"}
-        self.judged, self.followed = [], []
+        self.unnamed = "要不吃烧烤"
+        self.named, self.spoken = [], []
 
-        def provider(system, user, **_kwargs):
-            if "to_bot" in system:
-                self.followed.append(user)
-                return self.follow
+        def chat(system, user, tools=(), **_kwargs):
             if "没人点你的名" in system:
-                self.judged.append((system, user))
-                return self.interject() if callable(self.interject) else self.interject
-            return {"reply": "这是回答。"}
+                self.spoken.append((system, json.loads(user), [tool.name for tool in tools]))
+                return self.unnamed
+            self.named.append((system, user))
+            return "这是回答。"
 
-        self.ctx._llm = Mock(complete_json=provider)
+        self.ctx._llm = FakeLLM(chat=chat, decision=decision or {"fallback": {"speak": speak}})
         self.plugin = Plugin()
         self.plugin.on_load(self.ctx)
 
@@ -152,72 +129,150 @@ class PluginTests(unittest.TestCase):
     def at(self, text, sequence, sender=CAT):
         return self.say("@机器人\u2005" + text, sequence, sender=sender, at_members=(ROBOT,), is_at_self=True)
 
-    def test_zero_activity_and_chatter_never_call_the_model(self):
-        self.start(activity=0)
-        self.say("这个怎么弄？", 1)
-        self.store.room_settings[ROOM] = {"activity": 5}
-        self.say("哈哈", 2)
-        self.assertEqual(self.judged, [])
-        self.assertEqual(self.backend.sent, [])
+    def later(self, seconds=pro.QUIET_SECONDS + 1):
+        return time.monotonic() + seconds
 
-    def test_question_gets_one_line_with_full_context_then_bot_waits(self):
+    def test_unnamed_reply_off_only_answers_mentions(self):
+        self.start(unnamed=False)
+        self.at("今晚吃什么", 1)
+        self.say("那明天吃啥", 2)
+        self.plugin._watch_once(now=self.later())
+        self.plugin._watch_once(now=self.later(3600))
+        self.assertEqual(self.spoken, [])
+        self.assertEqual(self.backend.sent, [(ROOM, "这是回答。", 1)])
+
+    def test_hot_conversation_gets_one_plain_line_after_quiet(self):
         self.start()
         self.store.replace_facts(ROOM, CAT, ("喜欢火锅",), 0)
-        self.say("这个怎么弄？", 1)
-        system, user = self.judged[0]
+        self.at("今晚吃什么", 1)
+        self.say("那明天吃啥", 2)
+        self.plugin._watch_once(now=self.later(1))
+        self.assertEqual(self.spoken, [])
+        self.plugin._watch_once(now=self.later())
+        self.assertEqual(self.backend.sent[-1], (ROOM, "要不吃烧烤"))
+        system, body, tools = self.spoken[0]
         self.assertIn("禁止聊政治", system)
-        self.assertIn("这个怎么弄？", user)
-        self.assertIn("your_recent", user)
-        self.assertEqual(self.backend.sent, [(ROOM, "我帮你看一眼")])
-        self.say("那下一步呢", 2, sender=OTHER)
-        self.assertEqual(len(self.judged), 1)
+        self.assertEqual([row["text"][-5:] for row in body["transcript"]], ["今晚吃什么", "这是回答。", "那明天吃啥"])
+        self.assertEqual([row["bot"] for row in body["transcript"]], [False, True, False])
+        self.assertEqual(body["people"][0]["memory"], ["喜欢火锅"])
+        self.assertIn("search_history", tools)
+        self.assertNotIn("view_image", tools)
+        self.assertNotIn("web_search", tools)
+        self.assertEqual(self.store.recent_room_lines(ROOM, 60, 5)[-1]["text"], "要不吃烧烤")
+        self.plugin._watch_once(now=self.later(10))
+        self.assertEqual(len(self.spoken), 1)
 
-    def test_low_activity_holds_back_a_plain_question(self):
-        self.start(activity=2)
-        self.say("这个怎么弄？", 1)
-        self.assertEqual(self.judged, [])
-
-    def test_proactive_line_stays_plain_even_if_model_asks_to_quote(self):
-        self.start()
-        self.interject = {"reply": "试试先重启", "quote": True}
-        self.say("这个怎么弄？", 1)
-        self.assertEqual(self.backend.sent, [(ROOM, "试试先重启")])
-
-    def test_someone_answering_during_the_call_cancels_the_line(self):
-        self.start()
-
-        def answered():
-            self.store.record(self.message("先拧松螺丝", sender=OTHER, sequence=7))
-            return {"reply": "我帮你看一眼", "quote": False}
-
-        self.interject = answered
-        self.say("这个怎么弄？", 1)
-        self.assertEqual(len(self.judged), 1)
-        self.assertEqual(self.backend.sent, [])
-
-    def test_follow_up_without_mention_is_recognised_and_rejected_when_not_for_bot(self):
-        self.start()
-        self.at("今晚吃什么", 1)
-        self.assertEqual(self.backend.sent[-1], (ROOM, "这是回答。", 1))
-        self.say("那明天吃啥", 2)
-        self.assertEqual(len(self.followed), 1)
-        self.assertEqual(self.backend.sent[-1], (ROOM, "明天也行", 2))
-        self.follow = {"to_bot": False, "reply": ""}
-        self.say("我跟你们说个事", 3)
-        self.assertEqual(len(self.followed), 2)
-        self.assertEqual(len(self.backend.sent), 2)
-        self.say("今天降温了", 4)
-        self.assertEqual(len(self.followed), 2)
-
-    def test_follow_up_stays_off_when_activity_is_zero(self):
-        self.start(activity=0)
+    def test_decision_no_keeps_the_bot_quiet(self):
+        self.start(speak=0.0)
         self.at("今晚吃什么", 1)
         self.say("那明天吃啥", 2)
-        self.assertEqual(self.followed, [])
+        self.plugin._watch_once(now=self.later())
+        self.assertEqual(self.spoken, [])
         self.assertEqual(len(self.backend.sent), 1)
 
+    def test_mention_cancels_the_pending_hot_check(self):
+        self.start()
+        self.at("今晚吃什么", 1)
+        self.say("那明天吃啥", 2)
+        self.at("你说呢", 3)
+        self.plugin._watch_once(now=self.later())
+        self.assertEqual(self.spoken, [])
+        self.assertEqual(len(self.named), 2)
+
+    def test_decision_model_sees_the_trigger_and_chat(self):
+        self.start(decision={"enabled": True, "api_key": "decision-key"})
+        self.at("今晚吃什么", 1)
+        self.say("那明天吃啥", 2)
+        answer = io.BytesIO(json.dumps({"answers": {"speak": {"noul": 0.2}}}).encode())
+        with patch("wxbot_framework.llm.urlopen", return_value=answer) as call:
+            self.plugin._watch_once(now=self.later())
+        state = json.loads(call.call_args.args[0].data)["state"]
+        self.assertEqual(state["trigger"], "对话还热")
+        self.assertEqual(state["transcript"][-1]["text"], "那明天吃啥")
+        self.assertEqual(self.spoken, [])
+
+    def test_beat_runs_on_its_interval_and_respects_the_hourly_limit(self):
+        self.start(glance_minutes=2, hourly_limit=1)
+        self.unnamed = "我推荐香山"
+
+        def line(text, sequence, sender=CAT):
+            self.store.record(self.message(text, sender=sender, sequence=sequence))
+            self.now += timedelta(seconds=10)
+
+        line("我们周末去爬山吧", 1)
+        self.plugin._watch_once(now=1000)
+        line("好啊去哪座山", 2, sender=OTHER)
+        self.plugin._watch_once(now=1100)
+        self.assertEqual(self.spoken, [])
+        self.plugin._watch_once(now=1121)
+        self.assertEqual(self.backend.sent, [(ROOM, "我推荐香山")])
+        self.assertEqual(self.spoken[0][1]["transcript"][-1]["text"], "好啊去哪座山")
+        line("香山人多吗", 3)
+        self.plugin._watch_once(now=1300)
+        self.assertEqual(len(self.spoken), 1)
+        line("那早点出发", 4)
+        self.plugin._watch_once(now=1121 + pro.HOUR)
+        self.assertEqual(len(self.spoken), 2)
+
+    def test_beat_waits_for_quiet_and_is_off_at_zero_minutes(self):
+        self.start(glance_minutes=2)
+        self.store.record(self.message("我们周末去爬山吧", sequence=1))
+        self.plugin._watch_once(now=1000)
+        self.store.record(self.message("好啊去哪座山", sender=OTHER, sequence=2))
+        self.plugin._watch_once(now=1200)
+        self.assertEqual(self.spoken, [])
+        self.now += timedelta(seconds=10)
+        self.store.room_settings[ROOM]["glance_minutes"] = 0
+        self.plugin._watch_once(now=1400)
+        self.assertEqual(self.spoken, [])
+        self.store.room_settings[ROOM]["glance_minutes"] = 2
+        self.plugin._watch_once(now=1500)
+        self.assertEqual(len(self.spoken), 1)
+
+    def test_failed_or_blank_unnamed_reply_sends_nothing(self):
+        self.start(glance_minutes=1)
+        self.store.record(self.message("我们周末去爬山吧", sequence=1))
+        self.now += timedelta(seconds=10)
+        self.plugin._watch_once(now=1000)
+        replies = iter(("  ", LLMError("模拟超时")))
+
+        def chat(*_args, **_kwargs):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        self.ctx._llm.chat.side_effect = chat
+        for sequence in (2, 3):
+            self.store.record(self.message(f"第{sequence}句", sequence=sequence))
+            self.now += timedelta(seconds=10)
+            self.plugin._watch_once(now=1000 + sequence * 100)
+            self.assertEqual(self.ctx._llm.chat.call_count, sequence - 1)
+        self.assertEqual(self.backend.sent, [])
+
+    def test_lookup_tools_read_this_room_only(self):
+        self.start(unnamed=False)
+        self.store.replace_facts(ROOM, CAT, ("喜欢火锅",), 0)
+        for sequence, (text, room) in enumerate((("周末去爬山", ROOM), ("100%_爬山", ROOM), ("别的群爬山", daily.OTHER_ROOM),
+                                                  ("今天吃面", ROOM)), start=1):
+            self.store.record(self.message(text, room=room, sequence=sequence))
+        with self.store._connection() as db:
+            db.execute("INSERT INTO room_digests(account,room,local_day,summary) VALUES(?,?,?,?)",
+                       (ROBOT, ROOM, "2026-10-09", "大家约了  周末爬山"))
+        tools = {tool.name: tool for tool in chat_tools(self.ctx.llm, self.store, ROOM, speakers={"小猫": CAT})}
+        self.assertEqual(json.loads(tools["lookup_memory"].run({"name": "小猫"})), ["喜欢火锅"])
+        self.assertEqual(json.loads(tools["lookup_memory"].run({"name": "测试成员"})), ["喜欢火锅"])
+        self.assertIn("没有关于", tools["lookup_memory"].run({"name": "别人"}))
+        self.assertIn("群里没有", tools["lookup_memory"].run({"name": "路人甲"}))
+        self.assertEqual(json.loads(tools["lookup_diary"].run({"days": 99})),
+                         [{"date": "2026-10-09", "summary": "大家约了 周末爬山"}])
+        found = tools["search_history"].run({"keyword": "爬山", "days": 3})
+        self.assertEqual([line.split("：", 1)[1] for line in found.splitlines()], ["周末去爬山", "100%_爬山"])
+        self.assertEqual(tools["search_history"].run({"keyword": "%_"}).split("：", 1)[1], "100%_爬山")
+        self.assertEqual(tools["search_history"].run({"keyword": "火车"}), "没有找到相关聊天")
+
     def test_quoting_a_bot_line_gets_a_reply(self):
-        self.start(activity=0)
+        self.start(unnamed=False)
         self.at("今晚吃什么", 1)
         quoted = Message("真的假的", ROOM, sender_id=OTHER, is_group=True, session_id="test", sequence=2, type=49,
                          data={"app_type": 57, "quoted_message": {"author": "机器人", "kind": "text", "text": "这是回答。",
@@ -230,7 +285,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(len(self.backend.sent), 2)
 
     def test_quoting_the_bot_by_sender_replies_even_when_the_original_is_voice(self):
-        self.start(activity=0)
+        self.start(unnamed=False)
         voice = Message("你刚才说的啥", ROOM, sender_id=OTHER, is_group=True, session_id="test", sequence=1, type=49,
                         data={"app_type": 57, "quoted_sender_id": ROBOT,
                               "quoted_message": {"author": "机器人", "kind": "voice", "text": "[语音]",
@@ -246,69 +301,11 @@ class PluginTests(unittest.TestCase):
         self.plugin.on_message(someone, self.ctx)
         self.assertEqual(len(self.backend.sent), 1)
 
-    def test_complaint_mutes_and_raises_the_bar(self):
-        self.start()
-        self.say("这个怎么弄？", 1)
-        self.say("闭嘴吧", 2, sender=OTHER)
-        self.assertAlmostEqual(self.store.proactive_bias(ROOM), pro.ANNOYED_STEP)
-        self.now += timedelta(minutes=10)
-        self.say("还有谁会修电脑？", 3, sender=OTHER)
-        self.assertEqual(len(self.judged), 1)
-
-    def test_reactions_move_the_room_bar_and_persist(self):
-        self.start()
-        self.say("这个怎么弄？", 1)
-        self.at("谢谢你", 2, sender=OTHER)
-        self.assertAlmostEqual(self.store.proactive_bias(ROOM), pro.ENGAGED_STEP)
-        self.plugin.gate.mark(ROOM)
-        self.plugin._settle(self.ctx, ROOM, now=time.monotonic() + pro.IGNORE_WINDOW + 1)
-        self.assertAlmostEqual(self.store.proactive_bias(ROOM), pro.ENGAGED_STEP + pro.IGNORED_STEP)
-        self.assertEqual(self.store.shift_proactive_bias(ROOM, 5, pro.BIAS_LOW, pro.BIAS_HIGH), pro.BIAS_HIGH)
-
-    def test_quiet_group_gets_one_follow_up_per_silence(self):
-        self.start(activity=10)
-        self.store.record(self.message("我们今晚吃火锅", sequence=1))
-        self.now += timedelta(minutes=1)
-        self.plugin._watch_once()
-        self.assertEqual(self.judged, [])
-        self.now += timedelta(minutes=4)
-        self.interject = {"reply": "火锅也不错", "quote": True}
-        self.plugin._watch_once()
-        self.assertEqual(self.backend.sent, [(ROOM, "火锅也不错")])
-        self.assertIn("安静", self.judged[0][0])
-        self.plugin._watch_once()
-        self.assertEqual(len(self.judged), 1)
-
-    def test_low_activity_skips_quiet_group(self):
-        self.start(activity=3)
-        self.store.record(self.message("我们今晚吃火锅", sequence=1))
-        self.now += timedelta(minutes=5)
-        self.plugin._watch_once()
-        self.assertEqual(self.judged, [])
-
-    def test_glance_runs_on_its_interval_and_spends_budget(self):
-        self.start(activity=5, glance_minutes=2)
-        self.interject = {"reply": "我推荐香山", "quote": False}
-        self.store.record(self.message("我们周末去爬山吧", sequence=1))
-        self.store.record(self.message("好啊去哪座山", sender=OTHER, sequence=2))
-        self.plugin._watch_once(now=1000)
-        self.assertIn("隔了一会儿", self.judged[0][0])
-        self.assertEqual(self.backend.sent, [(ROOM, "我推荐香山")])
-        for sequence, text in ((3, "香山人多吗"), (4, "周末肯定多"), (5, "那早点出发")):
-            self.store.record(self.message(text, sequence=sequence))
-        self.plugin._watch_once(now=1010)
-        self.plugin._watch_once(now=1121)
-        self.assertEqual(len(self.judged), 1)
-        self.plugin.gate.earn(ROOM, 1)
-        self.plugin._watch_once(now=1130)
-        self.assertEqual(len(self.judged), 2)
-
-    def test_glance_off_when_interval_is_zero(self):
-        self.start(activity=10, glance_minutes=0)
-        self.store.record(self.message("我们周末去爬山吧", sequence=1))
-        self.store.record(self.message("好啊去哪座山", sender=OTHER, sequence=2))
-        self.plugin._watch_once(now=1000)
-        self.assertEqual(self.judged, [])
+    def test_model_error_gets_a_short_apology(self):
+        self.start(unnamed=False)
+        self.ctx._llm.chat.side_effect = LLMError("大模型接口 HTTP 401；请核对密钥、余额和模型配置", status=401)
+        self.at("在吗", 1)
+        self.assertIn("暂时无法回复", self.backend.sent[-1][1])
 
     def _png(self, name, color):
         path = self.root / name
@@ -320,42 +317,43 @@ class PluginTests(unittest.TestCase):
             sequence=1, type=3, data={"image_status": status, "image_path": str(path),
                                       "native_message_id": identifier}), self.ctx)
 
-    def _capture(self, provider):
-        self.ctx._llm.complete_json = provider
+    def _look(self):
+        """模型拿到 view_image 时就看一眼，记下送去看图的图片和提示。"""
+        self.offered, self.looked = [], []
 
-    def test_mention_sends_only_that_persons_recent_image(self):
-        self.start()
-        seen = []
+        def chat(system, user, tools=(), image=None, **_kwargs):
+            if image is not None:
+                self.looked.append(image)
+                return "一张纯色图片"
+            found = {tool.name: tool for tool in tools}
+            self.offered.append(("view_image" in found, "附带了一张图片" in system))
+            if "view_image" in found:
+                return found["view_image"].run({"question": "这是什么"})
+            return "看到了。"
 
-        def provider(system, user, image=None, **_kwargs):
-            seen.append(image)
-            if "to_bot" in system:
-                return {"to_bot": True, "reply": "接着说。"}
-            return {"reply": "看到了。"}
+        self.ctx._llm.chat.side_effect = chat
 
-        self._capture(provider)
+    def test_mention_offers_only_that_persons_recent_image(self):
+        self.start(unnamed=False)
+        self._look()
         red, blue = self._png("red.png", "red"), self._png("blue.png", "blue")
         self._picture(blue, sender=OTHER, identifier="81")
         self.at("看别人的图", 2)
-        self.assertIsNone(seen[-1])
+        self.assertEqual(self.offered[-1], (False, False))
         self._picture(red, status="failed", identifier="82")
         self.at("失败的图", 4)
-        self.assertIsNone(seen[-1])
+        self.assertEqual(self.offered[-1], (False, False))
         self._picture(red, identifier="83")
         self.at("这是什么", 6)
-        self.assertEqual(seen[-1], vision_data_url(red))
+        self.assertEqual(self.offered[-1], (True, True))
+        self.assertEqual(self.looked, [vision_data_url(red)])
+        self.assertIn("一张纯色图片", self.backend.sent[-1][1])
         self.say("那左边是什么意思", 7)
-        self.assertIsNone(seen[-1])
+        self.assertEqual(len(self.offered), 3)
 
     def test_quoted_image_wins_and_a_missing_quote_does_not_substitute(self):
-        self.start(activity=0)
-        seen = []
-
-        def provider(system, user, image=None, **_kwargs):
-            seen.append((image, "附带一张图片" in system, '"image": true' in user))
-            return {"reply": "看到了。"}
-
-        self._capture(provider)
+        self.start(unnamed=False)
+        self._look()
         red, blue = self._png("red.png", "red"), self._png("blue.png", "blue")
         self._picture(red, identifier="83")
         self._picture(blue, sender=OTHER, identifier="81")
@@ -365,49 +363,19 @@ class PluginTests(unittest.TestCase):
                                                  "available": True, "truncated": False}})
         self.store.record(quiet)
         self.plugin.on_message(quiet, self.ctx)
-        self.assertEqual(seen, [])
+        self.assertEqual(self.offered, [])
         asked = Message("看看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=10, type=49,
                         data={"app_type": 57, "is_at_self": True, "at_members": (ROBOT,), "quoted_message_id": "81",
                               "quoted_message": {"author": "别人", "kind": "image", "text": "[图片]",
                                                  "available": True, "truncated": False}})
         self.store.record(asked)
         self.plugin.on_message(asked, self.ctx)
-        self.assertEqual(seen[-1], (vision_data_url(blue), True, True))
+        self.assertEqual(self.offered[-1], (True, True))
+        self.assertEqual(self.looked, [vision_data_url(blue)])
         missing = Message("再看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=11, type=49,
                           data={"app_type": 57, "is_at_self": True, "at_members": (ROBOT,), "quoted_message_id": "404",
                                 "quoted_message": {"author": "别人", "kind": "image", "text": "[图片]",
                                                    "available": True, "truncated": False}})
         self.store.record(missing)
         self.plugin.on_message(missing, self.ctx)
-        self.assertEqual(seen[-1], (None, False, False))
-
-    def test_rejected_image_falls_back_to_text_and_other_errors_do_not(self):
-        self.start(activity=0)
-        path = self._png("red.png", "red")
-        calls = []
-
-        def reject(system, user, image=None, **_kwargs):
-            calls.append(image)
-            if image:
-                raise LLMError("大模型接口 HTTP 400；请核对密钥、余额和模型配置", status=400)
-            return {"reply": "只看文字。"}
-
-        self._capture(reject)
-        self._picture(path, identifier="83")
-        self.at("这是什么", 2)
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(str(calls[0]).startswith("data:image/png;base64,"))
-        self.assertIsNone(calls[1])
-        self.assertIn("只看文字。", self.backend.sent[-1][1])
-
-        calls.clear()
-        self.backend.sent.clear()
-
-        def denied(system, user, image=None):
-            calls.append(image)
-            raise LLMError("大模型接口 HTTP 401；请核对密钥、余额和模型配置", status=401)
-
-        self._capture(denied)
-        self.at("再看一次", 3)
-        self.assertEqual(len(calls), 1)
-        self.assertIn("暂时无法回复", self.backend.sent[-1][1])
+        self.assertEqual(self.offered[-1], (False, False))

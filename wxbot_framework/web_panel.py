@@ -323,8 +323,11 @@ class PanelController:
                 if name == 'llm':
                     for key, default in (('json_mode', True), ('token_limit_parameter', 'max_tokens'), ('extra_body', {})):
                         result[name].setdefault(key, default)
-                    from .llm import public_web_search
+                    from .decision import public_decision
+                    from .llm import public_vision, public_web_search
                     result[name]['web_search'] = public_web_search(value.get('web_search'))
+                    result[name]['vision'] = public_vision(value.get('vision'))
+                    result[name]['decision'] = public_decision(value.get('decision'))
                 if name == 'tts':
                     result[name].setdefault('provider', 'fish')
                 result[name]['api_key_configured'] = bool(value.get('api_key'))

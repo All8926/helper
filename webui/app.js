@@ -322,8 +322,9 @@ function readBehaviorForm() {
     personality: $('#behavior-personality').value || '默认', disabled_plugins: disabled,
     context_hours: contextNumber($('#behavior-hours').value, 6),
     context_limit: contextNumber($('#behavior-limit').value, 300),
-    activity: contextNumber($('#behavior-activity').value, 0),
+    unnamed_reply: $('#behavior-unnamed').checked,
     glance_minutes: contextNumber($('#behavior-glance').value, 2),
+    hourly_limit: contextNumber($('#behavior-hourly').value, 3),
     voice_mode: $('#behavior-voice').value,
     voice_rate: contextNumber($('#behavior-voice-rate').value, 5),
     voice_id: $('#behavior-voice-id').value.trim(),
@@ -388,8 +389,10 @@ function showBehavior(room) {
   $('#behavior-personality').value = selected;
   $('#behavior-hours').value = saved.context_hours || 6;
   $('#behavior-limit').value = saved.context_limit || 300;
-  $('#behavior-activity').value = Number.isInteger(saved.activity) ? saved.activity : (saved.proactive_enabled === true ? 5 : 0);
+  $('#behavior-unnamed').checked = typeof saved.unnamed_reply === 'boolean' ? saved.unnamed_reply
+    : ((Number.isInteger(saved.activity) && saved.activity > 0) || saved.proactive_enabled === true);
   $('#behavior-glance').value = Number.isInteger(saved.glance_minutes) ? saved.glance_minutes : 2;
+  $('#behavior-hourly').value = Number.isInteger(saved.hourly_limit) ? saved.hourly_limit : 3;
   const voice = config?.room_voices?.[room] || {};
   const voiceMode = saved.voice_mode || (!voice.voice_id || voice.enabled === false ? 'off' : (voice.mode === 'auto' ? 'auto' : 'always'));
   $('#behavior-voice').value = ['off', 'always', 'auto'].includes(voiceMode) ? voiceMode : 'off';
@@ -555,7 +558,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-activity', 'behavior-glance', 'behavior-voice', 'behavior-voice-rate', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-voice', 'behavior-voice-rate', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-recall').onchange = () => { behaviorDirty = true; };
 $('#behavior-recall-local').onchange = () => { behaviorDirty = true; };
@@ -806,6 +809,23 @@ function showModelProfile(name) {
     form.elements.web_search_count.value = search.count ?? 5;
     form.elements.clear_web_search_api_key.checked = false;
     $('.search-key-state', form).textContent = search.api_key_configured ? '已配置' : '留空则沿用模型密钥';
+    const vision = chosen.vision || {};
+    form.elements.vision_model.value = vision.model || '';
+    form.elements.vision_base_url.value = vision.base_url || '';
+    form.elements.vision_api_key.value = '';
+    form.elements.clear_vision_api_key.checked = false;
+    $('.vision-key-state', form).textContent = vision.api_key_configured ? '已配置' : '留空则沿用模型密钥';
+    const decision = chosen.decision || {};
+    const fallback = decision.fallback || {};
+    form.elements.decision_enabled.checked = decision.enabled === true;
+    form.elements.decision_base_url.value = decision.base_url || '';
+    form.elements.decision_model.value = decision.model || '';
+    form.elements.decision_api_key.value = '';
+    form.elements.decision_timeout_seconds.value = decision.timeout_seconds ?? 20;
+    form.elements.decision_fallback_speak.value = fallback.speak ?? 0.3;
+    form.elements.decision_fallback_voice.value = fallback.voice ?? 0.3;
+    form.elements.clear_decision_api_key.checked = false;
+    $('.decision-key-state', form).textContent = decision.api_key_configured ? '已配置' : '尚未配置';
   }
   form.querySelector('[data-profile-name]').value = chosen.name || '';
 }
@@ -827,7 +847,22 @@ function readModelForm(form, name) {
       timeout_seconds: values.web_search_timeout_seconds,
       count: values.web_search_count,
     };
-    for (const key of ['web_search_enabled', 'web_search_provider', 'web_search_base_url', 'web_search_api_key', 'web_search_timeout_seconds', 'web_search_count']) delete values[key];
+    values.vision = {
+      model: String(values.vision_model || '').trim(),
+      base_url: String(values.vision_base_url || '').trim(),
+      api_key: values.vision_api_key || '',
+    };
+    values.decision = {
+      enabled: values.decision_enabled === true,
+      base_url: String(values.decision_base_url || '').trim(),
+      model: String(values.decision_model || '').trim(),
+      api_key: values.decision_api_key || '',
+      timeout_seconds: values.decision_timeout_seconds,
+      fallback: {speak: values.decision_fallback_speak, voice: values.decision_fallback_voice},
+    };
+    for (const key of ['web_search_enabled', 'web_search_provider', 'web_search_base_url', 'web_search_api_key', 'web_search_timeout_seconds', 'web_search_count',
+      'vision_model', 'vision_base_url', 'vision_api_key',
+      'decision_enabled', 'decision_base_url', 'decision_model', 'decision_api_key', 'decision_timeout_seconds', 'decision_fallback_speak', 'decision_fallback_voice']) delete values[key];
   }
   return values;
 }

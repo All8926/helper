@@ -1,10 +1,12 @@
 """按群音色、取消竞态、合成回退和临时文件生命周期。"""
+import io
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 import unittest
 
 import test_chat_summary as daily
+from fake_llm import FakeLLM
 from test_tts import wav
 from plugins.voice_reply import Plugin
 from plugins.mention_chat import Plugin as ChatPlugin
@@ -132,14 +134,13 @@ class SpeechTests(unittest.TestCase):
         msg = self.message('@机器人\u2005评价一下', sequence=11,
                            data={'is_at_self': True, 'at_members': [daily.ROBOT]})
         self.store.record(msg)
-        self.ctx._llm = Mock(complete_json=Mock(return_value={'reply': '继续保持。'}))
+        self.ctx._llm = FakeLLM(chat=Mock(return_value='继续保持。'))
         plugin = ChatPlugin()
         plugin.on_load(self.ctx)
         plugin.on_message(msg, self.ctx)
         self.client.synthesize.assert_called_once_with('继续保持。', FIRST.id)
         self.assertEqual(self.backend.sent[-1], (ROOM, 'voice'))
-        payloads = [call.args[1] for call in self.ctx._llm.complete_json.call_args_list
-                    if len(call.args) > 1 and isinstance(call.args[1], str) and '"transcript"' in call.args[1]]
+        payloads = [call.args[1] for call in self.ctx._llm.chat.call_args_list]
         self.assertTrue(payloads)
         self.assertIn('今天写代码', payloads[-1])
 
@@ -158,16 +159,23 @@ class SpeechTests(unittest.TestCase):
         deliver_model_reply(self.ctx, self.message('再问', sequence=2), '看 https://example.com/a', speak=True)
         self.assertIn('https://example.com/a', self.backend.sent[-1][1])
         self.assertEqual(self.client.synthesize.call_count, 1)
-        self.ctx._llm = Mock(complete_json=Mock(return_value={'reply': '我念给你听。', 'voice': True}))
-        msg = self.message('@机器人\u2005讲一下', sequence=3, data={'is_at_self': True, 'at_members': [daily.ROBOT]})
-        self.store.record(msg)
+        self.ctx._llm = FakeLLM(chat=Mock(return_value='我念给你听。'), decision={'enabled': True, 'api_key': 'k'})
         plugin = ChatPlugin()
         plugin.on_load(self.ctx)
         try:
-            plugin.on_message(msg, self.ctx)
-            self.assertIn('语音频率是 5/10', self.ctx._llm.complete_json.call_args.args[0])
-            self.assertIn('"voice":false', self.ctx._llm.complete_json.call_args.args[0])
-            self.assertEqual(self.client.synthesize.call_count, 2)
+            # 语音频率 5 对应阈值 0.6：0.65 念出来，0.55 发文字。
+            for sequence, chance, voiced in ((3, 0.65, 2), (4, 0.55, 2)):
+                msg = self.message('@机器人\u2005讲一下', sequence=sequence,
+                                   data={'is_at_self': True, 'at_members': [daily.ROBOT]})
+                self.store.record(msg)
+                answer = io.BytesIO(json.dumps({'answers': {'voice': {'noul': chance}}}).encode())
+                with patch('wxbot_framework.llm.urlopen', return_value=answer) as call:
+                    plugin.on_message(msg, self.ctx)
+                body = json.loads(call.call_args.args[0].data)
+                self.assertIn('voice', body['questions'])
+                self.assertEqual(body['state']['reply'], '我念给你听。')
+                self.assertEqual(self.client.synthesize.call_count, voiced)
+            self.assertIn('我念给你听。', self.backend.sent[-1][1])
         finally:
             plugin.on_unload(self.ctx)
 

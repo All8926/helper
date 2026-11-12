@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import test_chat_summary as daily
+from fake_llm import FakeLLM
 from plugins.mention_chat import Plugin as ChatPlugin
 from plugins.personality import Plugin as PersonalityPlugin
 from plugins.idiom_chain import Plugin as IdiomPlugin
@@ -25,7 +26,7 @@ def dialogue_args(mock):
     """档案会在回复后再调一次模型，核对时要找到带流水的那一次。"""
     for item in reversed(mock.call_args_list):
         if len(item.args) > 1 and isinstance(item.args[1], str) and '"transcript"' in item.args[1]:
-            return item.args
+            return item.args[:2]
     raise AssertionError("没有把群聊流水交给模型")
 
 
@@ -48,7 +49,7 @@ class PersonalityTests(unittest.TestCase):
         self.backend.capabilities = ("text.quote.send",)
         self.backend.send_quote_text = lambda room, original_id, text: self.backend.sent.append((room, text, original_id)) or True
         self.backend.send_at_text = lambda room, text, ids: self.backend.sent.append((room, text, ids)) or True
-        self.ctx._llm = Mock(complete_json=provider or Mock(return_value={"reply": "这是回答。", "summary": "这是总结。"}))
+        self.ctx._llm = FakeLLM(chat=provider or Mock(return_value="这是回答。"))
         plugin = ChatPlugin()
         plugin.on_load(self.ctx)
         return plugin
@@ -248,7 +249,7 @@ class PersonalityTests(unittest.TestCase):
         self.store.set_personality(ROOM, "嘴臭")
         for index in range(3):
             self.store.record(self.message(f"我今天第{index}次摸鱼", sequence=index + 1))
-        provider = Mock(return_value={"reply": "你这效率，进度条看了都想请假。"})
+        provider = Mock(return_value="你这效率，进度条看了都想请假。")
         plugin = self.setup_chat(provider)
         msg = self.chat("我今天又摸鱼了")
         plugin.on_message(msg, self.ctx)
@@ -266,7 +267,7 @@ class PersonalityTests(unittest.TestCase):
     def test_short_mouth_dialogue_is_plain_and_keeps_real_at_and_context(self):
         self.store.set_personality(ROOM, "嘴臭")
         self.store.record(self.message("今天写了三行代码", sequence=1))
-        provider = Mock(return_value={"reply": "```text\n**三行代码就敢吹，先把手上的任务搞定再说。**\n```"})
+        provider = Mock(return_value="```text\n**三行代码就敢吹，先把手上的任务搞定再说。**\n```")
         plugin = self.setup_chat(provider)
         plugin.on_message(self.chat("我已经很强了"), self.ctx)
         sent = self.backend.sent[-1]
@@ -277,7 +278,7 @@ class PersonalityTests(unittest.TestCase):
         sent_context = json.loads(dialogue_args(provider)[1])["transcript"]
         self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
         self.assertIn("长度与排版优先", dialogue_args(provider)[0])
-        provider.return_value = {"reply": "#**```"}
+        provider.return_value = "#**```"
         plugin.on_message(self.chat(sequence=101), self.ctx)
         self.assertIn("暂时无法回复", self.backend.sent[-1][1])
 
@@ -304,7 +305,7 @@ class PersonalityTests(unittest.TestCase):
             self.assertFalse(any(char in text for char in "`#*-|"))
 
     def test_mention_of_other_person_and_bot_output_do_not_call_model(self):
-        provider = Mock(return_value={"reply": "回答"})
+        provider = Mock(return_value="回答")
         plugin = self.setup_chat(provider)
         for msg in (self.chat(at_members=(OTHER,)), self.chat(sequence=101, bot_generated=True),
                     self.message("@机器人 只是可见文字"), Message("私聊", CAT)):
@@ -332,9 +333,9 @@ class PersonalityTests(unittest.TestCase):
     def test_clear_and_personality_change_during_chat_request_cancel_reply(self):
         for mutation in (lambda: self.store.clear(ROOM), lambda: self.store.set_personality(ROOM, "卑微")):
             self.store.set_personality(ROOM, "嘴臭")
-            def change(system, user, **_kwargs):
+            def change(*_args, **_kwargs):
                 mutation()
-                return {"reply": "失效的结果"}
+                return "失效的结果"
             plugin = self.setup_chat(change)
             plugin.on_message(self.chat(), self.ctx)
         self.assertEqual(self.backend.sent, [])
@@ -357,7 +358,7 @@ class PersonalityTests(unittest.TestCase):
 
     def test_long_reply_respects_byte_limit_including_mention_nickname(self):
         self.store.register("🌸" * 64, ROOM, CAT)
-        plugin = self.setup_chat(Mock(return_value={"reply": "中文🌸" * 190}))
+        plugin = self.setup_chat(Mock(return_value="中文🌸" * 190))
         plugin.on_message(self.chat(), self.ctx)
         self.assertGreater(len(self.backend.sent), 1)
         self.assertTrue(all(len(row[1].encode("utf-8")) <= 1023 for row in self.backend.sent))
@@ -366,13 +367,13 @@ class PersonalityTests(unittest.TestCase):
 
     def test_invalid_model_reply_is_reported_without_deleting_context(self):
         self.store.record(self.message("历史", sequence=1))
-        plugin = self.setup_chat(Mock(return_value={"reply": ""}))
+        plugin = self.setup_chat(Mock(return_value=""))
         plugin.on_message(self.chat(), self.ctx)
         self.assertIn("暂时无法回复", self.backend.sent[-1][1])
         self.assertEqual(len(self.store.conversation_snapshot(self.chat(sequence=101)).messages), 2)
 
     def test_reply_over_configured_limit_is_rejected(self):
-        plugin = self.setup_chat(Mock(return_value={"reply": "字" * 601}))
+        plugin = self.setup_chat(Mock(return_value="字" * 601))
         plugin.on_message(self.chat(), self.ctx)
         self.assertIn("暂时无法回复", self.backend.sent[-1][1])
 

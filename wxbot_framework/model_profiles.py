@@ -10,13 +10,26 @@ MAX_PROFILES = 12
 SYNTHETIC = {"llm": "current-llm", "tts": "current-tts"}
 FIELDS = {
     "llm": ("base_url", "model", "timeout_seconds", "max_tokens", "json_mode",
-            "token_limit_parameter", "extra_body", "web_search"),
+            "token_limit_parameter", "extra_body", "web_search", "vision", "decision"),
     "tts": ("provider", "base_url", "model", "timeout_seconds", "default_voice", "max_chars_per_clip"),
 }
 
 
 class ProfileError(ValueError):
     pass
+
+
+def _blocks():
+    """llm 配置里带独立密钥的几块：名称 -> (校验函数, 网页可改的字段, 网页视图函数)。"""
+    from .decision import normalize_decision, public_decision
+    from .llm import normalize_vision, normalize_web_search, public_vision, public_web_search
+    return {
+        "web_search": (normalize_web_search, ("enabled", "provider", "base_url", "timeout_seconds", "count"),
+                       public_web_search),
+        "vision": (normalize_vision, ("base_url", "model"), public_vision),
+        "decision": (normalize_decision, ("enabled", "base_url", "model", "timeout_seconds", "fallback"),
+                     public_decision),
+    }
 
 
 def blank():
@@ -133,8 +146,8 @@ def _public(kind, item):
     view.update(id=item["id"], name=item["name"], api_key_configured=bool(item.get("api_key")),
                 api_key=item.get("api_key") or "")
     if kind == "llm":
-        from .llm import public_web_search
-        view["web_search"] = public_web_search(item.get("web_search"))
+        for name, (_, _, public) in _blocks().items():
+            view[name] = public(item.get(name))
     return view
 
 
@@ -156,7 +169,7 @@ def _merge(kind, base, incoming):
     if not incoming:
         return doc
     for key in FIELDS[kind]:
-        if key in incoming and key != "web_search":
+        if key in incoming and key not in ("web_search", "vision", "decision"):
             doc[key] = incoming[key]
     key = incoming.get("api_key", "")
     if not isinstance(key, str) or len(key) > 1024 or any(ord(char) < 32 for char in key):
@@ -172,38 +185,37 @@ def _merge(kind, base, incoming):
                 and is_worldguide_url(base.get("base_url")) != is_worldguide_url(doc.get("base_url"))):
             raise ProfileError("切换 WorldGuide 接口时，请填写新接口的 API 密钥或清除已保存的密钥")
     if kind == "llm":
-        doc["web_search"] = _merge_web_search(
-            base.get("web_search"),
-            incoming.get("web_search") if "web_search" in incoming else None,
-            incoming.get("clear_web_search_api_key") is True)
+        for name, (normalize, fields, _) in _blocks().items():
+            doc[name] = _merge_block(name, normalize, fields, base.get(name),
+                                     incoming.get(name) if name in incoming else None,
+                                     incoming.get(f"clear_{name}_api_key") is True)
     return doc
 
 
-def _merge_web_search(previous, incoming, clear):
-    """空密钥表示保留原来的搜索密钥。清除开关单独生效。"""
-    from .llm import normalize_web_search
+def _merge_block(name, normalize, fields, previous, incoming, clear):
+    """空密钥表示保留原来的密钥。清除开关单独生效。"""
     try:
-        stored = normalize_web_search(previous if isinstance(previous, dict) else None)
+        stored = normalize(previous if isinstance(previous, dict) else None)
     except ValueError as error:
         raise ProfileError(str(error)) from error
     if incoming is None and not clear:
         return stored
     if incoming is not None and not isinstance(incoming, dict):
-        raise ProfileError("web_search 应为 JSON 对象")
+        raise ProfileError(f"{name} 应为 JSON 对象")
     draft = dict(stored)
     if isinstance(incoming, dict):
-        for key in ("enabled", "provider", "base_url", "timeout_seconds", "count"):
+        for key in fields:
             if key in incoming:
                 draft[key] = incoming[key]
         key = incoming.get("api_key", "")
         if not isinstance(key, str) or len(key) > 1024 or any(ord(char) < 32 for char in key):
-            raise ProfileError("搜索密钥格式不正确")
+            raise ProfileError(f"{name} 密钥格式不正确")
         if key.strip():
             draft["api_key"] = key.strip()
     if clear:
         draft["api_key"] = ""
     try:
-        return normalize_web_search(draft)
+        return normalize(draft)
     except ValueError as error:
         raise ProfileError(str(error)) from error
 

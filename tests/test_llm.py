@@ -11,7 +11,9 @@ from urllib.error import HTTPError, URLError
 
 from PIL import Image
 
-from wxbot_framework.llm import LLMClient, LLMError
+from wxbot_framework.chat_tools import Tool, chat_tools, web_search_tool
+from wxbot_framework.decision import Decider, normalize_decision, public_decision
+from wxbot_framework.llm import MAX_TOOL_ROUNDS, LLMClient, LLMError
 from wxbot_framework.vision import SeenImages, vision_data_url
 from plugins.idiom_chain.judge import IdiomJudge
 
@@ -349,91 +351,191 @@ class LLMTests(unittest.TestCase):
         settings.update(overrides)
         return LLMClient({**self.options, "web_search": settings})
 
-    def test_closed_search_does_not_add_tools(self):
-        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{"reply":"好"}')) as call:
-            self.assertEqual(self.client.complete_json("规则", "问题", search=True), {"reply": "好"})
+    @staticmethod
+    def _raw(item):
+        return io.BytesIO(json.dumps(item).encode())
+
+    @staticmethod
+    def _calling(name, arguments, call_id="call_1", reasoning=None):
+        message = {"content": "", "tool_calls": [{"id": call_id, "type": "function",
+                                                  "function": {"name": name, "arguments": arguments}}]}
+        if reasoning is not None:
+            message["reasoning_content"] = reasoning
+        return {"choices": [{"finish_reason": "tool_calls", "message": message}]}
+
+    def test_chat_without_tools_returns_plain_text(self):
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response(" 你好呀 ")) as call:
+            self.assertEqual(self.client.chat("规则", "问题"), "你好呀")
         body = json.loads(call.call_args.args[0].data)
         self.assertNotIn("tools", body)
-        self.assertNotIn("web_search_options", body)
-        self.assertNotIn("web_search", body["messages"][0]["content"])
+        self.assertNotIn("response_format", body)
+        self.assertNotIn("JSON", body["messages"][0]["content"])
 
-    def test_http_search_runs_once_and_returns_reasoning(self):
-        client = self._search()
-        tool = {"choices": [{"finish_reason": "tool_calls", "message": {
-            "content": "", "reasoning_content": "先查一下",
-            "tool_calls": [{"id": "call_1", "type": "function",
-                            "function": {"name": "web_search", "arguments": '{"query":"今天新闻"}'}}]}}]}
-        found = {"results": [{"title": "标题", "url": "https://example.com/a", "summary": "摘要"}]}
-        final = {"choices": [{"finish_reason": "stop", "message": {"content": '{"reply":"结果"}'}}]}
-        bodies = [json.dumps(item).encode() for item in (tool, found, final)]
-        with patch("wxbot_framework.llm.urlopen", side_effect=[io.BytesIO(body) for body in bodies]) as call:
-            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "结果"})
-        self.assertEqual([item.args[0].full_url for item in call.call_args_list], [
-            "https://api.deepseek.com/chat/completions",
-            "https://search.example.test/v1/tools/search",
-            "https://api.deepseek.com/chat/completions"])
-        self.assertEqual(call.call_args_list[1].args[0].get_header("Authorization"), "Bearer search-key")
-        first, search_body, second = [json.loads(item.args[0].data) for item in call.call_args_list]
-        self.assertEqual(first["tools"][0]["function"]["name"], "web_search")
-        self.assertNotIn("response_format", first)
-        self.assertEqual(search_body["query"], "今天新闻")
-        self.assertEqual(search_body["count"], 2)
-        self.assertFalse(search_body["need_content"])
-        self.assertNotIn("tools", second)
-        self.assertEqual(second["messages"][2]["reasoning_content"], "先查一下")
-        self.assertIn("摘要", second["messages"][3]["content"])
-
-    def test_blank_search_key_reuses_the_model_key(self):
-        client = self._search(api_key="")
-        tool = {"choices": [{"finish_reason": "tool_calls", "message": {
-            "content": None, "tool_calls": [{"id": "call_1", "type": "function",
-                                             "function": {"name": "web_search", "arguments": '{"query":"天气"}'}}]}}]}
-        found = {"results": [{"title": "天气", "url": "https://example.com/w", "snippet": "晴"}]}
-        final = {"choices": [{"message": {"content": '{"reply":"晴"}'}}]}
-        bodies = [io.BytesIO(json.dumps(item).encode()) for item in (tool, found, final)]
+    def test_chat_runs_tools_and_passes_reasoning_back(self):
+        seen = []
+        tool = Tool("echo", "回声", {"type": "object", "properties": {}},
+                    lambda args: seen.append(args) or "工具结果")
+        bodies = [self._raw(self._calling("echo", '{"word":"嗨"}', reasoning="先查一下")),
+                  self.response("最终回答")]
         with patch("wxbot_framework.llm.urlopen", side_effect=bodies) as call:
-            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "晴"})
-        self.assertEqual(call.call_args_list[1].args[0].get_header("Authorization"), "Bearer dummy-test-key")
+            self.assertEqual(self.client.chat("规则", "问题", [tool]), "最终回答")
+        self.assertEqual(seen, [{"word": "嗨"}])
+        first, second = [json.loads(item.args[0].data) for item in call.call_args_list]
+        self.assertEqual(first["tools"][0]["function"]["name"], "echo")
+        self.assertEqual(second["messages"][2]["reasoning_content"], "先查一下")
+        self.assertEqual(second["messages"][2]["tool_calls"][0]["id"], "call_1")
+        self.assertEqual(second["messages"][3], {"role": "tool", "tool_call_id": "call_1", "content": "工具结果"})
+        self.assertNotIn("tool_choice", second)
 
-    def test_search_transport_failure_retries_without_search(self):
-        client = self._search()
-        tool = {"choices": [{"finish_reason": "tool_calls", "message": {
-            "tool_calls": [{"id": "call_1", "type": "function",
-                            "function": {"name": "web_search", "arguments": '{"query":"新闻"}'}}]}}]}
+    def test_tool_errors_go_back_to_the_model(self):
+        def broken(args):
+            raise LLMError("搜索服务挂了")
+        tool = Tool("broken", "坏的", {"type": "object", "properties": {}}, broken)
+        bodies = [self._raw(self._calling("broken", "{}")), self._raw(self._calling("missing", "{}", "call_2")),
+                  self._raw(self._calling("broken", "not json", "call_3")), self.response("算了")]
+        with patch("wxbot_framework.llm.urlopen", side_effect=bodies) as call:
+            self.assertEqual(self.client.chat("规则", "问题", [tool]), "算了")
+        messages = json.loads(call.call_args_list[-1].args[0].data)["messages"]
+        results = [item["content"] for item in messages if item["role"] == "tool"]
+        self.assertEqual(results, ["工具出错：搜索服务挂了", "没有这个工具", "工具参数应为 JSON 对象"])
 
-        def respond(request, timeout):
-            if request.full_url.endswith("/search"):
-                raise URLError("down")
-            body = json.loads(request.data)
-            if "tools" in body:
-                return io.BytesIO(json.dumps(tool).encode())
-            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"reply":"不联网"}'}}]}).encode())
+    def test_tool_rounds_are_bounded(self):
+        tool = Tool("echo", "回声", {"type": "object", "properties": {}}, lambda args: "x")
+        bodies = [self._raw(self._calling("echo", "{}", f"call_{index}")) for index in range(MAX_TOOL_ROUNDS)]
+        with patch("wxbot_framework.llm.urlopen", side_effect=bodies + [self.response("收尾")]) as call:
+            self.assertEqual(self.client.chat("规则", "问题", [tool]), "收尾")
+        self.assertEqual(call.call_count, MAX_TOOL_ROUNDS + 1)
+        self.assertEqual(json.loads(call.call_args_list[-1].args[0].data)["tool_choice"], "none")
+        self.assertNotIn("tool_choice", json.loads(call.call_args_list[-2].args[0].data))
 
-        with patch("wxbot_framework.llm.urlopen", side_effect=respond) as call:
-            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "不联网"})
-        self.assertEqual(call.call_count, 3)
-        self.assertNotIn("tools", json.loads(call.call_args_list[-1].args[0].data))
-        self.assertNotIn("web_search", json.loads(call.call_args_list[-1].args[0].data)["messages"][0]["content"])
+    def test_model_without_tool_support_retries_without_tools(self):
+        tool = Tool("echo", "回声", {"type": "object", "properties": {}}, lambda args: "x")
+        error = HTTPError("https://example.test", 400, "tools unsupported", {}, None)
+        with patch("wxbot_framework.llm.urlopen", side_effect=[error, self.response("好")]) as call:
+            self.assertEqual(self.client.chat("规则", "问题", [tool]), "好")
+        first, second = [json.loads(item.args[0].data) for item in call.call_args_list]
+        self.assertIn("tools", first)
+        self.assertNotIn("tools", second)
 
-    def test_doubao_search_uses_the_chat_request_and_falls_back(self):
+    def test_blank_chat_reply_retries_once_then_fails(self):
+        raw = {"choices": [{"finish_reason": "stop", "message": {"content": "", "reasoning_content": "想想"}}]}
+        with patch("wxbot_framework.llm.urlopen", side_effect=[self._raw(raw), self.response("想好了")]) as call:
+            self.assertEqual(self.client.chat("规则", "问题"), "想好了")
+        self.assertEqual(json.loads(call.call_args_list[1].args[0].data)["thinking"], {"type": "disabled"})
+        with patch("wxbot_framework.llm.urlopen", side_effect=[self._raw(raw), self._raw(raw)]):
+            with self.assertRaisesRegex(LLMError, "空结果"):
+                self.client.chat("规则", "问题")
+
+    def test_closed_search_is_not_offered_as_a_tool(self):
+        names = [tool.name for tool in chat_tools(self.client, None, "room")]
+        self.assertNotIn("web_search", names)
+        self.assertIn("web_search", [tool.name for tool in chat_tools(self._search(), None, "room")])
+
+    def test_http_search_tool_uses_its_own_key_or_the_model_key(self):
+        found = {"results": [{"title": "标题", "url": "https://example.com/a", "summary": "摘要"},
+                             {"title": "天气", "url": "javascript:x", "snippet": "晴"}]}
+        for key, expected in (("search-key", "Bearer search-key"), ("", "Bearer dummy-test-key")):
+            with self.subTest(key=key), patch("wxbot_framework.llm.urlopen", return_value=self._raw(found)) as call:
+                result = json.loads(web_search_tool(self._search(api_key=key)).run({"query": "今天新闻"}))
+            request = call.call_args.args[0]
+            self.assertEqual(request.full_url, "https://search.example.test/v1/tools/search")
+            self.assertEqual(request.get_header("Authorization"), expected)
+            self.assertEqual(json.loads(request.data), {"query": "今天新闻", "count": 2, "need_content": False})
+            self.assertEqual(result, [{"title": "标题", "url": "https://example.com/a", "summary": "摘要"},
+                                      {"title": "天气", "url": "", "summary": "晴"}])
+
+    def test_search_transport_failure_reaches_the_model_as_a_tool_error(self):
+        with patch("wxbot_framework.llm.urlopen", side_effect=URLError("down")):
+            with self.assertRaisesRegex(LLMError, "联网搜索连接失败"):
+                web_search_tool(self._search()).run({"query": "新闻"})
+        with self.assertRaisesRegex(ValueError, "query"):
+            web_search_tool(self._search()).run({"query": "  "})
+
+    def test_doubao_search_tool_is_a_separate_request_without_tools(self):
         client = LLMClient({**self.options, "base_url": "https://ark.cn-beijing.volces.com/api/v3",
                             "model": "doubao-seed-2-0-lite",
                             "web_search": {"enabled": True, "provider": "doubao"}})
+        answer = {"choices": [{"message": {"content": "今天晴", "annotations": [
+            {"type": "url_citation", "url_citation": {"url": "https://weather.example/a"}}]}}]}
+        with patch("wxbot_framework.llm.urlopen", return_value=self._raw(answer)) as call:
+            self.assertEqual(web_search_tool(client).run({"query": "天气"}), "今天晴\n来源：https://weather.example/a")
+        body = json.loads(call.call_args.args[0].data)
+        self.assertEqual(call.call_args.args[0].full_url, "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+        self.assertEqual(body["web_search_options"], {})
+        self.assertNotIn("tools", body)
+        self.assertEqual(body["messages"][1]["content"], "天气")
 
-        def respond(request, timeout):
-            body = json.loads(request.data)
-            if "web_search_options" in body:
-                self.assertNotIn("tools", body)
-                raise HTTPError(request.full_url, 400, "closed", {}, None)
-            self.assertNotIn("web_search_options", body)
-            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"reply":"好"}'}}]}).encode())
-
-        with patch("wxbot_framework.llm.urlopen", side_effect=respond):
-            self.assertEqual(client.complete_json("规则", "问题", search=True), {"reply": "好"})
+    def test_vision_client_falls_back_to_the_dialogue_model(self):
+        self.assertIs(self.client.vision_client(), self.client)
+        client = LLMClient({**self.options, "extra_body": {"temperature": 0.5},
+                            "vision": {"model": "qwen-vl", "base_url": "https://vision.example.test/v1"}})
+        vision = client.vision_client()
+        self.assertEqual((vision.model, vision.base_url, vision.api_key, vision.extra_body),
+                         ("qwen-vl", "https://vision.example.test/v1", "dummy-test-key", {}))
+        with self.assertRaises(ValueError):
+            LLMClient({**self.options, "vision": {"base_url": "http://example.com"}})
 
     def test_http_search_requires_a_url_when_enabled(self):
         with self.assertRaisesRegex(ValueError, "base_url"):
             self._search(base_url="", api_key="")
+
+
+class DecisionTests(unittest.TestCase):
+    def setUp(self):
+        self.options = {"enabled": True, "api_key": "decision-key", "fallback": {"speak": 0.2, "voice": 0.7}}
+
+    @staticmethod
+    def answer(value):
+        return io.BytesIO(json.dumps({"answers": {"speak": {"noul": value}}}).encode())
+
+    def test_model_answer_is_compared_with_the_threshold(self):
+        decider = Decider(self.options)
+        with patch("wxbot_framework.llm.urlopen", return_value=self.answer(0.6)) as call:
+            self.assertTrue(decider.yes("speak", "该说话吗", ("该说", "不该说"), {"chat": "大家好"}))
+        request = call.call_args.args[0]
+        self.assertEqual(request.full_url, "https://emrank.tech/v1/decisions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer decision-key")
+        self.assertEqual(request.get_header("User-agent"), "helper/1.0")
+        body = json.loads(request.data)
+        self.assertEqual(body["model"], "typesafe/jev[slow]")
+        self.assertEqual(body["state"], {"chat": "大家好"})
+        self.assertEqual(body["questions"], {"speak": {"type": "noul", "instructions": "该说话吗",
+                                                       "criteria": {"true": "该说", "false": "不该说"}}})
+        with patch("wxbot_framework.llm.urlopen", return_value=self.answer(0.6)):
+            self.assertFalse(decider.yes("speak", "该说话吗", ("该说", "不该说"), {}, threshold=0.7))
+
+    def test_long_state_keeps_only_the_tail(self):
+        with patch("wxbot_framework.llm.urlopen", return_value=self.answer(0.9)) as call:
+            Decider(self.options).yes("speak", "问", ("是", "否"), {"chat": "旧" * 20000 + "最新"})
+        context = json.loads(call.call_args.args[0].data)["state"]["context"]
+        self.assertTrue(context.endswith('最新"}'))
+        self.assertLessEqual(len(context), 12000)
+
+    def test_unavailable_model_falls_back_to_the_configured_chance(self):
+        failures = (URLError("down"), HTTPError("https://emrank.tech", 403, "blocked", {}, None),
+                    self.answer(1.5), self.answer("0.9"), io.BytesIO(b'{"answers":{}}'))
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), patch(
+                    "wxbot_framework.llm.urlopen", side_effect=[failure]), patch(
+                    "wxbot_framework.decision.random.random", return_value=0.1):
+                self.assertTrue(Decider(self.options).yes("speak", "问", ("是", "否"), {}))
+        with patch("wxbot_framework.llm.urlopen") as call, patch(
+                "wxbot_framework.decision.random.random", return_value=0.5):
+            self.assertFalse(Decider({**self.options, "enabled": False}).yes("speak", "问", ("是", "否"), {}))
+            self.assertTrue(Decider({**self.options, "enabled": False}).yes("voice", "问", ("是", "否"), {}))
+        call.assert_not_called()
+
+    def test_settings_validate_and_hide_the_key(self):
+        self.assertEqual(normalize_decision(None)["fallback"], {"speak": 0.3, "voice": 0.3})
+        for change in ({"api_key": ""}, {"base_url": "http://example.com"}, {"timeout_seconds": 0},
+                       {"fallback": {"speak": 2}}, {"fallback": {"voice": True}}, {"enabled": "yes"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                normalize_decision({**self.options, **change})
+        shown = public_decision(self.options)
+        self.assertNotIn("api_key", shown)
+        self.assertTrue(shown["api_key_configured"])
+        with self.assertRaises(ValueError):
+            Decider(None).yes("other", "问", ("是", "否"), {})
 
 
 class JudgeTests(unittest.TestCase):

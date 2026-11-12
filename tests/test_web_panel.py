@@ -236,6 +236,32 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['web_search']['api_key'], '')
         self.assertFalse(read_json(path)['web_search']['enabled'])
 
+    def test_vision_and_decision_blocks_keep_and_hide_their_keys(self):
+        path = self.root/'llm_config.json'
+        data = read_json(path)
+        data['api_key'] = 'model-secret'
+        path.write_text(json.dumps(data), encoding='utf-8')
+        self.controller.save_configuration({'llm': {
+            'vision': {'model': 'qwen-vl', 'base_url': '', 'api_key': 'vision-secret'},
+            'decision': {'enabled': True, 'base_url': 'https://emrank.tech/v1', 'model': 'typesafe/jev[slow]',
+                         'api_key': 'decision-secret', 'timeout_seconds': 20,
+                         'fallback': {'speak': 0.4, 'voice': 0.1}}}})
+        stored = read_json(path)
+        self.assertEqual((stored['vision']['api_key'], stored['decision']['api_key']), ('vision-secret', 'decision-secret'))
+        self.assertEqual(stored['decision']['fallback'], {'speak': 0.4, 'voice': 0.1})
+        shown = self.controller.configuration()['llm']
+        for name in ('vision', 'decision'):
+            self.assertNotIn('api_key', shown[name])
+            self.assertTrue(shown[name]['api_key_configured'])
+        self.controller.save_configuration({'llm': {
+            'vision': {'model': 'qwen-vl', 'base_url': '', 'api_key': ''},
+            'clear_decision_api_key': True,
+            'decision': {'enabled': False, 'api_key': '', 'fallback': {'speak': 0.4, 'voice': 0.1}}}})
+        stored = read_json(path)
+        self.assertEqual((stored['vision']['api_key'], stored['decision']['api_key']), ('vision-secret', ''))
+        with self.assertRaises(PanelError):
+            self.controller.save_configuration({'llm': {'decision': {'enabled': True, 'fallback': {'speak': 2}}}})
+
     def test_model_profiles_can_be_added_and_switched_without_leaking_keys(self):
         path = self.root/'llm_config.json'
         data = read_json(path)
@@ -548,24 +574,26 @@ class HTTPTests(PanelFixture):
         store = MemberStore(path, 'wxid_test_robot')
         self.addCleanup(store.close)
         with self.assertRaisesRegex(PanelError, '音色 ID'):
-            self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto'})
+            self.controller.save_room_behavior({'room': room, 'setting': {'unnamed_reply': True, 'hourly_limit': 2}, 'voice_mode': 'auto'})
         self.assertNotIn(room, read_json(path).get('room_settings') or {})
         tts = read_json(self.root / 'tts_config.json')
         tts['default_voice'] = 'b' * 32
         (self.root / 'tts_config.json').write_text(json.dumps(tts), encoding='utf-8')
-        saved = self.controller.save_room_behavior({'room': room, 'setting': {'activity': 1}, 'voice_mode': 'always'})
+        saved = self.controller.save_room_behavior({'room': room, 'setting': {'hourly_limit': 1}, 'voice_mode': 'always'})
         self.assertEqual(saved['room_voices'][room]['voice_id'], 'b' * 32)
         self.assertTrue(saved['room_voices'][room]['enabled'])
         saved = self.controller.save_room_behavior(
-            {'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto', 'voice_id': 'A' * 32})
+            {'room': room, 'setting': {'unnamed_reply': True, 'hourly_limit': 2}, 'voice_mode': 'auto', 'voice_id': 'A' * 32})
         self.assertEqual(saved['room_voices'][room]['voice_id'], 'a' * 32)
         self.assertEqual(saved['room_voices'][room]['mode'], 'auto')
         store.set_voice(room, 'a' * 32, '测试甲')
-        saved = self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'auto'})
+        saved = self.controller.save_room_behavior({'room': room, 'setting': {'unnamed_reply': True, 'hourly_limit': 2}, 'voice_mode': 'auto'})
         self.assertEqual(saved['room_voices'][room]['mode'], 'auto')
         self.assertEqual(saved['room_voices'][room]['name'], '测试甲')
-        self.assertEqual(saved['room_settings'][room]['activity'], 2)
-        self.controller.save_room_behavior({'room': room, 'setting': {'activity': 2}, 'voice_mode': 'off'})
+        self.assertEqual(saved['room_settings'][room]['hourly_limit'], 2)
+        self.assertTrue(saved['room_settings'][room]['unnamed_reply'])
+        self.assertNotIn('activity', saved['room_settings'][room])
+        self.controller.save_room_behavior({'room': room, 'setting': {'unnamed_reply': True, 'hourly_limit': 2}, 'voice_mode': 'off'})
         self.assertFalse(self.controller.configuration()['room_voices'][room]['enabled'])
 
 
