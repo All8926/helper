@@ -13,7 +13,6 @@ from fake_llm import FakeLLM
 from plugins.mention_chat import Plugin
 from wxbot_framework import proactive as pro
 from wxbot_framework.chat_tools import chat_tools
-from wxbot_framework.dialogue import voice_threshold
 from wxbot_framework.llm import LLMError
 from wxbot_framework.room_behavior import BehaviorError, normalize_reply_limit, normalize_room_setting
 from wxbot_framework.sdk import Message
@@ -26,14 +25,20 @@ class FilterTests(unittest.TestCase):
     def test_settings_default_and_validate(self):
         default = normalize_room_setting({}, [])
         self.assertFalse(default["unnamed_reply"])
-        self.assertEqual((default["glance_minutes"], default["hourly_limit"], default["voice_rate"]), (2, 3, 5))
+        self.assertEqual((default["glance_minutes"], default["hourly_limit"], default["voice_threshold"]), (2, 3, 0.6))
+        self.assertNotIn("voice_rate", default)
+        self.assertEqual(normalize_room_setting({"voice_rate": 9}, [])["voice_threshold"], 0.4)
+        self.assertEqual(normalize_room_setting({"voice_threshold": 0.7, "voice_rate": 1}, [])["voice_threshold"], 0.7)
+        self.assertEqual(default["speak_threshold"], 0.5)
+        self.assertEqual(normalize_room_setting({"speak_threshold": 0.8}, [])["speak_threshold"], 0.8)
+        self.assertEqual(normalize_room_setting({"speak_threshold": 0}, [])["speak_threshold"], 0.0)
         self.assertNotIn("activity", default)
         self.assertTrue(normalize_room_setting({"activity": 4}, [])["unnamed_reply"])
         self.assertFalse(normalize_room_setting({"activity": 0}, [])["unnamed_reply"])
         self.assertTrue(normalize_room_setting({"proactive_enabled": True}, [])["unnamed_reply"])
         self.assertFalse(normalize_room_setting({"unnamed_reply": False, "activity": 9}, [])["unnamed_reply"])
         self.assertEqual(normalize_room_setting({"glance_minutes": 0, "hourly_limit": 0}, [])["hourly_limit"], 0)
-        self.assertEqual(normalize_room_setting({"voice_rate": 9}, [])["voice_rate"], 9)
+        self.assertEqual(normalize_room_setting({"voice_threshold": 0.25}, [])["voice_threshold"], 0.25)
         self.assertTrue(default["deep_thinking"])
         self.assertFalse(normalize_room_setting({"deep_thinking": False}, [])["deep_thinking"])
         self.assertEqual(normalize_reply_limit(None), 600)
@@ -42,7 +47,8 @@ class FilterTests(unittest.TestCase):
             with self.assertRaises(BehaviorError):
                 normalize_reply_limit(bad)
         for bad in ({"unnamed_reply": "yes"}, {"glance_minutes": 61}, {"hourly_limit": 31}, {"hourly_limit": True},
-                    {"voice_rate": 0}, {"deep_thinking": "yes"}):
+                    {"speak_threshold": 1.1}, {"speak_threshold": True},
+                    {"voice_threshold": -0.1}, {"voice_threshold": True}, {"deep_thinking": "yes"}):
             with self.subTest(bad=bad), self.assertRaises(BehaviorError):
                 normalize_room_setting(bad, [])
 
@@ -78,13 +84,9 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(take(300, last_id=3, limit=2), "beat")
         self.assertEqual(take(121 + pro.HOUR, last_id=4), "beat")
 
-    def test_reply_cleanup_and_voice_threshold(self):
+    def test_reply_cleanup(self):
         self.assertEqual(pro.clean_reply("  试试\n先重启 "), "试试 先重启")
         self.assertEqual(pro.clean_reply(None), "")
-        self.assertEqual(voice_threshold(1), 0.8)
-        self.assertEqual(voice_threshold(5), 0.6)
-        self.assertEqual(voice_threshold(10), 0.35)
-        self.assertEqual(voice_threshold(99), 0.35)
 
 
 class PluginTests(unittest.TestCase):
@@ -169,6 +171,21 @@ class PluginTests(unittest.TestCase):
         self.plugin._watch_once(now=self.later())
         self.assertEqual(self.spoken, [])
         self.assertEqual(len(self.backend.sent), 1)
+
+    def test_room_speak_threshold_decides_the_same_probability(self):
+        self.start(speak_threshold=0.8, decision={"enabled": True, "api_key": "decision-key"})
+        self.at("今晚吃什么", 1)
+        self.say("那明天吃啥", 2)
+        answer = io.BytesIO(json.dumps({"answers": {"speak": {"noul": 0.6}}}).encode())
+        with patch("wxbot_framework.llm.urlopen", return_value=answer):
+            self.plugin._watch_once(now=self.later())
+        self.assertEqual(self.spoken, [])
+        self.store.room_settings[ROOM]["speak_threshold"] = 0.5
+        self.say("那你再说一次", 3)
+        again = io.BytesIO(json.dumps({"answers": {"speak": {"noul": 0.6}}}).encode())
+        with patch("wxbot_framework.llm.urlopen", return_value=again):
+            self.plugin._watch_once(now=self.later(20))
+        self.assertEqual(len(self.spoken), 1)
 
     def test_mention_cancels_the_pending_hot_check(self):
         self.start()

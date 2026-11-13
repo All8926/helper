@@ -759,14 +759,23 @@ class MemberStore:
         except BehaviorError:
             return DEFAULT_HOURLY_LIMIT
 
-    def room_voice_rate(self, room):
-        """自动语音的频率，1–10。没写时是 5。"""
-        from .room_behavior import BehaviorError, DEFAULT_VOICE_RATE, normalize_voice_rate
+    def room_speak_threshold(self, room):
+        """未点名回应时，决策概率达到这个数才说话。没写时是 0.5。"""
+        from .room_behavior import BehaviorError, DEFAULT_SPEAK_THRESHOLD, normalize_speak_threshold
         setting = self.room_settings.get(room) or {}
         try:
-            return normalize_voice_rate(setting.get("voice_rate"))
+            return normalize_speak_threshold(setting.get("speak_threshold"))
         except BehaviorError:
-            return DEFAULT_VOICE_RATE
+            return DEFAULT_SPEAK_THRESHOLD
+
+    def room_voice_threshold(self, room):
+        """自动语音时，决策概率达到这个数才念出来。没写时是 0.6。"""
+        from .room_behavior import BehaviorError, DEFAULT_VOICE_THRESHOLD, normalize_voice_threshold
+        setting = self.room_settings.get(room) or {}
+        try:
+            return normalize_voice_threshold(setting.get("voice_threshold"), setting)
+        except BehaviorError:
+            return DEFAULT_VOICE_THRESHOLD
 
     def room_glance_minutes(self, room):
         """未点名回应隔几分钟看一眼群，0 表示不按节拍看。"""
@@ -936,8 +945,8 @@ class MemberStore:
             raise MemberError(f"多个群都有 {name}，请指定群 ID")
         return rows[0]
 
-    def recent_room_lines(self, room, seconds, limit):
-        """最近几分钟的群文本，从旧到新。跳过指令和探测消息。"""
+    def recent_room_lines(self, room, seconds, limit, *, clip=200):
+        """最近几分钟的群文本，从旧到新。跳过指令和探测消息。clip 为 None 时不截断正文。"""
         from .summary import CONTROL
         from .text import own_group_command
 
@@ -961,7 +970,7 @@ class MemberStore:
                 chosen.append({
                     "id": row["id"],
                     "sender_id": row["sender_id"],
-                    "text": text[:200],
+                    "text": text if clip is None else text[:clip],
                     "bot": bool(row["bot_generated"]),
                     "session_id": row["session_id"] or "",
                     "sequence": row["sequence"],

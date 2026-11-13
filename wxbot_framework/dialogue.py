@@ -19,14 +19,33 @@ diary 是近两天的群日记，memory 是当前说话人的档案，都只作�
 _IMAGE = "\n当前消息附带了一张图片。对方要你看图或问到图里的内容时，调用 view_image 查看，不要说自己看不见。"
 
 VOICE_QUESTION = "群聊机器人的这句回复适合念成语音发出去吗？"
-VOICE_CRITERIA = ("回复是口语化的短句，适合直接听，或者对方想听机器人说话",
-                  "回复里有链接、代码、长串数字、列表等需要看的文字，或者只是普通的文字交流")
+VOICE_CRITERIA = (
+    "结合当前这句话和最近的聊天，这句回复适合直接听",
+    "回复里有链接、代码、长串数字、列表等需要看的文字，或者结合当前这句话和最近的聊天，念出来并不合适",
+)
+VOICE_CONTEXT_LINES = 8
+VOICE_REPLY_LIMIT = 300
 
 
-def voice_threshold(rate):
-    """群语音频率 1–10 换算成决策阈值。频率越高，越容易念出来。"""
-    rate = min(max(int(rate), 1), 10)
-    return round(0.85 - 0.05 * rate, 2)
+def _voice_line(row, bot_id):
+    """语音决策用的一条聊天。只去掉换行和 @ 标签，不截断正文。"""
+    text = " ".join(strip_at_labels(str(row.get("text") or "")).split())
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(row["received_at"]).astimezone(BEIJING).strftime("%H:%M:%S")
+    except (TypeError, ValueError, KeyError):
+        moment = ""
+    bot = bool(row.get("bot") or row.get("bot_generated") or (bot_id and row.get("sender_id") == bot_id))
+    return {"time": moment, "speaker": row.get("speaker") or "群友", "text": text, "bot": bot}
+
+
+def voice_state(heard, reply, rows, bot_id):
+    """送给决策模型的语音题材料。回复可以截断，当前这句话和最近几条聊天保持原文。"""
+    message = " ".join(strip_at_labels(str(heard or "")).split())
+    lines = [line for row in rows if (line := _voice_line(row, bot_id))]
+    return {"message": message, "reply": str(reply or "")[:VOICE_REPLY_LIMIT],
+            "transcript": lines[-VOICE_CONTEXT_LINES:]}
 
 
 def transcript_line(row, *, current):

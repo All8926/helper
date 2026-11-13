@@ -133,17 +133,18 @@
             </div>
             <p class="group-name-hint">这是读取上限。艾特或叫别名时，只把这段里最新的 24 条、合计不超过 2400 字送给模型。默认读取 6 小时、300 条。</p>
             <label class="inline" for="behavior-unnamed"><input id="behavior-unnamed" type="checkbox">未点名回应</label>
-            <div class="field-pair">
+            <div class="field-pair three">
               <label for="behavior-glance">看群间隔（分钟）<input id="behavior-glance" type="number" min="0" max="60" step="1" value="2"></label>
               <label for="behavior-hourly">每小时最多主动说几句<input id="behavior-hourly" type="number" min="0" max="30" step="1" value="3"></label>
+              <label for="behavior-speak">说话门槛（0–1）<input id="behavior-speak" type="number" min="0" max="1" step="0.05" value="0.5"></label>
             </div>
-            <p class="group-name-hint">关闭时只在被艾特、叫别名或引用它的话时回复。开启后有两种时机：机器人说完话 3 分钟内有人发言，等群里安静几秒再判断；平时每隔「看群间隔」看一眼，有新发言就判断，0 表示不按间隔看。由决策模型判断现在该不该说话，该说就直接发到群里，不引用、不艾特。「每小时最多主动说几句」只限制按间隔看群时说的话。</p>
+            <p class="group-name-hint">关闭时只在被艾特、叫别名或引用它的话时回复。开启后有两种时机：机器人说完话 3 分钟内有人发言，等群里安静几秒再判断；平时每隔「看群间隔」看一眼，有新发言就判断，0 表示不按间隔看。决策模型给出的概率达到「说话门槛」才说，默认 0.5，越高越少开口。该说就直接发到群里，不引用、不艾特。「每小时最多主动说几句」只限制按间隔看群时说的话。</p>
             <div class="field-pair">
               <label for="behavior-voice">语音回复<select id="behavior-voice"><option value="off">关闭（文字）</option><option value="always">始终语音</option><option value="auto">自动</option></select></label>
-              <label for="behavior-voice-rate">语音频率（1–10）<input id="behavior-voice-rate" type="number" min="1" max="10" step="1" value="5"></label>
+              <label for="behavior-voice-threshold">语音门槛（0–1）<input id="behavior-voice-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>
             </div>
             <label for="behavior-voice-id">本群音色 ID<input id="behavior-voice-id" spellcheck="false" autocomplete="off" placeholder="留空则用模型与语音里的默认音色 ID"></label>
-            <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念。自动按刚才的对话决定，语音频率只在自动时生效：1 很少念，10 口语也常念。选了语音时最多连续 3 条，再长改文字。音色填 ID，留空时使用「模型与语音」里的默认音色 ID。</p>
+            <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念。自动时，决策模型给出的概率达到「语音门槛」才念，默认 0.6，越高越少念。选了语音时最多连续 3 条，再长改文字。音色填 ID，留空时使用「模型与语音」里的默认音色 ID。</p>
             <label class="inline" for="behavior-thinking"><input id="behavior-thinking" type="checkbox" checked>深度思考</label>
             <p class="group-name-hint">默认开启。DeepSeek 和豆包会打开或关闭深度思考，千问会打开或关闭思考，Grok 只会把思考强度调到高或低。扩展参数里已经写过的思考项仍然优先。</p>
             <label for="behavior-admins">管理员微信 ID</label>

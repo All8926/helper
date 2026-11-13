@@ -227,10 +227,13 @@ class SpeechController:
             if not owned.is_relative_to(directory.resolve()):
                 raise TTSError("语音临时目录超出预期范围")
             paths = []
+            synth_seconds = 0.0
             for index, part in enumerate(speech_chunks(text, client.max_chars_per_clip)):
                 with guard():
                     pass
+                synth_started = time.perf_counter()
                 data = client.synthesize(part, voice.id)
+                synth_seconds += time.perf_counter() - synth_started
                 with guard():
                     pass
                 path = owned / f'{index}.wav'
@@ -238,10 +241,13 @@ class SpeechController:
                 paths.append(path)
             with guard():
                 pass
+            send_started = time.perf_counter()
             for path in paths:
                 if not ctx.reply_voice(message, path, delivery_guard=guard):
                     # 微信是否已送达不确定，不在此处重复发文字或重试。
                     raise RuntimeError("原生语音发送未确认成功")
+            ctx.logger.info("语音耗时 | 群=%s | 合成 %.2f秒 | %d段 | 发送 %.2f秒",
+                            message.chat_id, synth_seconds, len(paths), time.perf_counter() - send_started)
         return True
 
 

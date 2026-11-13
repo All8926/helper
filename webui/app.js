@@ -297,6 +297,11 @@ function contextNumber(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) ? number : fallback;
 }
+function contextDecimal(value, fallback) {
+  if (value === '' || value == null) return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
 function roomTitle(room) {
   return config?.group_names?.[room] || discoveredName(room) || '';
 }
@@ -325,8 +330,9 @@ function readBehaviorForm() {
     unnamed_reply: $('#behavior-unnamed').checked,
     glance_minutes: contextNumber($('#behavior-glance').value, 2),
     hourly_limit: contextNumber($('#behavior-hourly').value, 3),
+    speak_threshold: contextDecimal($('#behavior-speak').value, 0.5),
     voice_mode: $('#behavior-voice').value,
-    voice_rate: contextNumber($('#behavior-voice-rate').value, 5),
+    voice_threshold: contextDecimal($('#behavior-voice-threshold').value, 0.6),
     voice_id: $('#behavior-voice-id').value.trim(),
     deep_thinking: $('#behavior-thinking').checked,
     plugin_options: readNoticeOptions()};
@@ -393,10 +399,13 @@ function showBehavior(room) {
     : ((Number.isInteger(saved.activity) && saved.activity > 0) || saved.proactive_enabled === true);
   $('#behavior-glance').value = Number.isInteger(saved.glance_minutes) ? saved.glance_minutes : 2;
   $('#behavior-hourly').value = Number.isInteger(saved.hourly_limit) ? saved.hourly_limit : 3;
+  $('#behavior-speak').value = Number.isFinite(Number(saved.speak_threshold)) ? saved.speak_threshold : 0.5;
   const voice = config?.room_voices?.[room] || {};
   const voiceMode = saved.voice_mode || (!voice.voice_id || voice.enabled === false ? 'off' : (voice.mode === 'auto' ? 'auto' : 'always'));
   $('#behavior-voice').value = ['off', 'always', 'auto'].includes(voiceMode) ? voiceMode : 'off';
-  $('#behavior-voice-rate').value = Number.isInteger(saved.voice_rate) ? saved.voice_rate : 5;
+  const legacyVoice = Number.isInteger(saved.voice_rate) && saved.voice_rate >= 1 && saved.voice_rate <= 10
+    ? Math.round((0.85 - 0.05 * saved.voice_rate) * 100) / 100 : 0.6;
+  $('#behavior-voice-threshold').value = Number.isFinite(Number(saved.voice_threshold)) ? saved.voice_threshold : legacyVoice;
   $('#behavior-voice-id').value = saved.voice_id != null ? saved.voice_id : (voice.voice_id || '');
   $('#behavior-thinking').checked = saved.deep_thinking !== false;
   const voiceHint = $('#behavior-voice-hint');
@@ -558,7 +567,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-voice', 'behavior-voice-rate', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-speak', 'behavior-voice', 'behavior-voice-threshold', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-recall').onchange = () => { behaviorDirty = true; };
 $('#behavior-recall-local').onchange = () => { behaviorDirty = true; };

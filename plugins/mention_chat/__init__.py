@@ -8,8 +8,8 @@ from datetime import datetime
 from wxbot_framework import proactive as pro
 from wxbot_framework.chat_tools import chat_tools
 from wxbot_framework.decision import Decider
-from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, VOICE_CRITERIA, VOICE_QUESTION, Dialogue, checked_reply,
-                                      transcript_line, voice_threshold, working_messages)
+from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, VOICE_CONTEXT_LINES, VOICE_CRITERIA, VOICE_QUESTION, Dialogue,
+                                      checked_reply, transcript_line, voice_state, working_messages)
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import BEIJING, SnapshotExpired
 from wxbot_framework.memory import MemoryWorker, public_diary, public_memory
@@ -130,7 +130,7 @@ class Plugin:
             memory=self.members.facts_for(room, message.sender_id), tools=tools, image=bool(image),
             limit=self.members.reply_limit)
         reply = personality_text(reply, personality.name)
-        speak = self._voice(ctx, room, snapshot.current, reply)
+        speak = self._voice(ctx, room, snapshot.current, reply, snapshot.messages)
         model_seconds = time.perf_counter() - started
         return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
 
@@ -157,14 +157,14 @@ class Plugin:
         return {row["speaker"]: row["sender_id"] for row in rows
                 if row.get("speaker") and row.get("sender_id") and not pro.is_bot(row, self.members.account)}
 
-    def _voice(self, ctx, room, heard, reply):
+    def _voice(self, ctx, room, heard, reply, rows=()):
         """本群开了自动语音时，问决策模型这句要不要念出来。返回 None 表示按本群语音模式处理。"""
         if not self._auto_voice(room):
             return None
-        state = {"message": " ".join(strip_at_labels(str(heard or "")).split())[:200], "reply": reply[:300]}
+        state = voice_state(heard, reply, rows, self.members.account)
         return Decider(ctx.llm.decision, logger=ctx.logger).yes(
             "voice", VOICE_QUESTION, VOICE_CRITERIA, state,
-            threshold=voice_threshold(self.members.room_voice_rate(room)))
+            threshold=self.members.room_voice_threshold(room))
 
     def _auto_voice(self, room):
         """本群开了语音、并且设成自动时，才让决策模型决定这句念不念。"""
@@ -240,7 +240,9 @@ class Plugin:
         transcript = [{**transcript_line(row, current=False), "bot": pro.is_bot(row, bot)} for row in chosen]
         label = _TRIGGER.get(trigger, trigger)
         state = {"trigger": label, "transcript": transcript[-20:]}
-        if not Decider(ctx.llm.decision, logger=ctx.logger).yes("speak", pro.SPEAK_QUESTION, pro.SPEAK_CRITERIA, state):
+        if not Decider(ctx.llm.decision, logger=ctx.logger).yes(
+                "speak", pro.SPEAK_QUESTION, pro.SPEAK_CRITERIA, state,
+                threshold=self.members.room_speak_threshold(room)):
             ctx.logger.info("未点名回应 | 群=%s | 触发=%s | 不说 | %.2f秒", room, label, time.perf_counter() - started)
             return
         anchor = self._anchor(room, last)
@@ -255,7 +257,8 @@ class Plugin:
         except (LLMError, PersonalityExpired) as error:
             ctx.logger.warning("未点名回应失败：%.2f秒 | %s", time.perf_counter() - started, error)
             return
-        speak = self._voice(ctx, room, last.get("text"), reply)
+        voice_rows = self.members.recent_room_lines(room, hours * 3600, VOICE_CONTEXT_LINES, clip=None)
+        speak = self._voice(ctx, room, last.get("text"), reply, voice_rows)
         guard = lambda: ctx.personality_guard(personality)
         try:
             deliver_model_reply(ctx, anchor, reply, delivery_guard=guard, speak=speak)

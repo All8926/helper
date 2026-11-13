@@ -19,7 +19,6 @@ DEFAULT_CONTEXT_HOURS = 6
 DEFAULT_CONTEXT_LIMIT = 300
 MAX_CONTEXT_HOURS = 168
 MAX_CONTEXT_LIMIT = 2000
-MAX_VOICE_RATE = 10
 DEFAULT_GLANCE_MINUTES = 2
 MAX_GLANCE_MINUTES = 60
 DEFAULT_HOURLY_LIMIT = 3
@@ -188,16 +187,29 @@ def normalize_deep_thinking(value):
     return value
 
 
-DEFAULT_VOICE_RATE = 5
+DEFAULT_SPEAK_THRESHOLD = 0.5
+DEFAULT_VOICE_THRESHOLD = 0.6
 
 
-def normalize_voice_rate(value):
-    """自动语音时 1–10，越大越常把口语念出来。没填时是 5。"""
+def normalize_speak_threshold(value):
+    """未点名回应时，决策概率达到这个数才说话。没填时 0.5。0 表示模型给出的概率都算该说，1 表示只有 1 才说。"""
     if value is None:
-        return DEFAULT_VOICE_RATE
-    if type(value) is not int or not 1 <= value <= MAX_VOICE_RATE:
-        raise BehaviorError("语音频率应为 1–10 的整数")
-    return value
+        return DEFAULT_SPEAK_THRESHOLD
+    if type(value) is bool or type(value) not in (int, float) or value != value or not 0 <= value <= 1:
+        raise BehaviorError("说话门槛应为 0–1 之间的数")
+    return round(float(value), 2)
+
+
+def normalize_voice_threshold(value, setting=None):
+    """自动语音时，决策概率达到这个数才念出来。没填时 0.6。旧的语音频率 1–10 按原换算保留。"""
+    if value is None:
+        legacy = setting.get("voice_rate") if isinstance(setting, dict) else None
+        if type(legacy) is int and 1 <= legacy <= 10:
+            return round(0.85 - 0.05 * legacy, 2)
+        return DEFAULT_VOICE_THRESHOLD
+    if type(value) is bool or type(value) not in (int, float) or value != value or not 0 <= value <= 1:
+        raise BehaviorError("语音门槛应为 0–1 之间的数")
+    return round(float(value), 2)
 
 
 def normalize_glance_minutes(value):
@@ -286,7 +298,8 @@ def normalize_room_setting(value, names):
             "unnamed_reply": normalize_unnamed_reply(value.get("unnamed_reply"), value),
             "glance_minutes": normalize_glance_minutes(value.get("glance_minutes")),
             "hourly_limit": normalize_hourly_limit(value.get("hourly_limit")),
-            "voice_rate": normalize_voice_rate(value.get("voice_rate")),
+            "speak_threshold": normalize_speak_threshold(value.get("speak_threshold")),
+            "voice_threshold": normalize_voice_threshold(value.get("voice_threshold"), value),
             "deep_thinking": normalize_deep_thinking(value.get("deep_thinking")),
             "plugin_options": normalize_plugin_options(value.get("plugin_options"))}
 

@@ -10,6 +10,7 @@ from fake_llm import FakeLLM
 from test_tts import wav
 from plugins.voice_reply import Plugin
 from plugins.mention_chat import Plugin as ChatPlugin
+from wxbot_framework.dialogue import voice_state
 from wxbot_framework.members import SnapshotExpired
 from wxbot_framework.speech import SpeechController, deliver_model_reply, prefer_voice, speech_chunks
 from wxbot_framework.text import own_group_command
@@ -159,11 +160,13 @@ class SpeechTests(unittest.TestCase):
         deliver_model_reply(self.ctx, self.message('再问', sequence=2), '看 https://example.com/a', speak=True)
         self.assertIn('https://example.com/a', self.backend.sent[-1][1])
         self.assertEqual(self.client.synthesize.call_count, 1)
+        ask = '你开口说话' + '呀' * 180
+        self.store.record(self.message(ask, sequence=2))
         self.ctx._llm = FakeLLM(chat=Mock(return_value='我念给你听。'), decision={'enabled': True, 'api_key': 'k'})
         plugin = ChatPlugin()
         plugin.on_load(self.ctx)
         try:
-            # 语音频率 5 对应阈值 0.6：0.65 念出来，0.55 发文字。
+            # 默认语音门槛 0.6：0.65 念出来，0.55 发文字。
             for sequence, chance, voiced in ((3, 0.65, 2), (4, 0.55, 2)):
                 msg = self.message('@机器人\u2005讲一下', sequence=sequence,
                                    data={'is_at_self': True, 'at_members': [daily.ROBOT]})
@@ -173,11 +176,22 @@ class SpeechTests(unittest.TestCase):
                     plugin.on_message(msg, self.ctx)
                 body = json.loads(call.call_args.args[0].data)
                 self.assertIn('voice', body['questions'])
+                self.assertIn('最近的聊天', body['questions']['voice']['criteria']['true'])
+                self.assertEqual(body['state']['message'], '讲一下')
                 self.assertEqual(body['state']['reply'], '我念给你听。')
+                self.assertIn(ask, [line['text'] for line in body['state']['transcript']])
+                self.assertLessEqual(len(body['state']['transcript']), 8)
                 self.assertEqual(self.client.synthesize.call_count, voiced)
             self.assertIn('我念给你听。', self.backend.sent[-1][1])
         finally:
             plugin.on_unload(self.ctx)
+        long_reply = voice_state('当前这句不截断' * 30, '回' * 400,
+                                 [{'text': '第%d句' % index, 'speaker': '测试成员',
+                                   'received_at': '2026-10-10T04:00:%02d+00:00' % index} for index in range(9)],
+                                 daily.ROBOT)
+        self.assertEqual(long_reply['message'], '当前这句不截断' * 30)
+        self.assertEqual(len(long_reply['reply']), 300)
+        self.assertEqual([line['text'] for line in long_reply['transcript']], ['第%d句' % index for index in range(1, 9)])
 
     def test_chunks_do_not_lose_text(self):
         text = '第一句话。第二句话！第三句话很长很长很长很长。'

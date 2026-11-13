@@ -97,8 +97,8 @@ class Decider:
         if not self.options["enabled"]:
             return None
         encoded = json.dumps(state, ensure_ascii=False)
-        if len(encoded) > STATE_LIMIT:
-            # 状态过长时只保留末尾，最新的聊天在最后。
+        # 带聊天记录的决策保持每一条原文。没有记录、又长过上限时，只留末尾。
+        if len(encoded) > STATE_LIMIT and not (isinstance(state, dict) and isinstance(state.get("transcript"), list)):
             state = {"context": encoded[-STATE_LIMIT:]}
         body = {"model": self.options["model"], "state": state,
                 "questions": {name: {"type": "noul", "instructions": instructions,
