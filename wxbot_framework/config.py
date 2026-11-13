@@ -34,7 +34,40 @@ def initialize_configs(directory):
         except FileExistsError:
             continue
         created.append(destination.name)
+    if ensure_decision_config(directory):
+        created.append("decision_config.json")
     return created
+
+
+def ensure_decision_config(directory, template=None):
+    """补上决策模型配置。大模型配置里还嵌着 decision 时，把它拆出来。"""
+    directory = Path(directory)
+    destination = directory / "decision_config.json"
+    if destination.exists():
+        return False
+    legacy, llm_path, llm_raw = None, directory / "llm_config.json", None
+    if llm_path.is_file():
+        try:
+            llm_raw = json.loads(llm_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            llm_raw = None
+        if isinstance(llm_raw, dict) and isinstance(llm_raw.get("decision"), dict):
+            legacy = llm_raw.pop("decision")
+    if legacy is None:
+        template_path = Path(template) if template else directory / "decision_config.example.json"
+        if not template_path.is_file():
+            return False
+        text = template_path.read_text(encoding="utf-8-sig")
+    else:
+        text = json.dumps(legacy, ensure_ascii=False, indent=2) + "\n"
+    try:
+        with destination.open("x", encoding="utf-8", newline="\n") as output:
+            output.write(text)
+    except FileExistsError:
+        return False
+    if legacy is not None:
+        llm_path.write_text(json.dumps(llm_raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return True
 
 
 def validate_name(name):
@@ -61,6 +94,9 @@ class ConfigStore:
         tts_file = data.get("tts_config_file", "tts_config.json")
         if not isinstance(tts_file, str) or not tts_file.strip() or "\0" in tts_file:
             raise ValueError("tts_config_file 应为语音合成配置文件路径")
+        decision_file = data.get("decision_config_file", "decision_config.json")
+        if not isinstance(decision_file, str) or not decision_file.strip() or "\0" in decision_file:
+            raise ValueError("decision_config_file 应为决策模型配置文件路径")
         members_file = data.get("members_config_file")
         if members_file is not None and (not isinstance(members_file, str) or not members_file.strip() or "\0" in members_file):
             raise ValueError("members_config_file 应为成员配置文件路径或 null")

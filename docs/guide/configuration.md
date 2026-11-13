@@ -143,14 +143,6 @@
     "model": "",
     "base_url": "",
     "api_key": ""
-  },
-  "decision": {
-    "enabled": false,
-    "base_url": "https://emrank.tech/v1",
-    "api_key": "",
-    "model": "typesafe/jev[slow]",
-    "timeout_seconds": 20,
-    "fallback": {"speak": 0.3, "voice": 0.3}
   }
 }
 ```
@@ -218,12 +210,14 @@
 
 ### 决策模型
 
-`decision` 写在每一份大模型配置里。没被点名时“现在该不该说话”、自动语音时“这句要不要念出来”，都由决策模型回答。请求 `POST {base_url}/decisions`，题型为 `noul`，返回 0–1 的概率。
+决策模型单独放在 `decision_config.json`，由 `bot_config.json` 的 `decision_config_file` 指定。网页「模型与语音 → 决策模型」可以保存多份并切换，和大模型、语音一样：保存只更新当前这一份，点「切换使用」后下次启动生效。正在使用的那份直接保存也会更新。
+
+没被点名时“现在该不该说话”、自动语音时“这句要不要念出来”，都由当前这份决策模型回答。`base_url` 是完整的请求地址，原样 POST，不再追加路径。各家路径不同，例如 emrank 以 `/v1/decisions` 结尾，百炼以 `/compatible-mode/v1/systemone` 结尾。请求体都是 `{model, state, questions}`，是非题用 `noul`，读 `answers[问题名].noul`（0–1）。旧配置里只有 `https://emrank.tech/v1` 时，会当成 `https://emrank.tech/v1/decisions`。以前写在大模型配置里的 `decision`，启动时会拆进这个文件。
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `enabled` | `false` | 启用时必须填写 `api_key` |
-| `base_url` | `https://emrank.tech/v1` | 决策接口地址 |
+| `base_url` | `https://emrank.tech/v1/decisions` | 完整的决策请求地址，原样 POST |
 | `api_key` | 空 | 决策密钥，和模型密钥分开保存 |
 | `model` | `typesafe/jev[slow]` | 决策模型名 |
 | `timeout_seconds` | `20` | 1–60 秒 |

@@ -778,15 +778,17 @@ $('#confirm-plugin-reset').onclick=()=>action(()=>submitPluginSource(true));
 $('#plugin-form').onsubmit=event=>{event.preventDefault();if(!$('#save-plugin-source').disabled)action(()=>submitPluginSource());};
 $('#groups-form').onsubmit=e=>{e.preventDefault();const groups=lines(e.target.elements.groups.value);const data={groups,history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked};if(config&&Object.hasOwn(config,'group_names'))data.group_names=Object.fromEntries(groups.map(room=>[room,groupNameDraft.get(room)||'']));action(()=>save(data));};
 $('#scope-form').onsubmit=e=>{e.preventDefault();action(()=>save({chat_allowlist:lines(e.target.elements.chat_allowlist.value)}));};
-let profileSelection = {llm:'', tts:''}, pendingProfile = null;
+const profileKinds = ['llm', 'tts', 'decision'];
+let profileSelection = {llm:'', tts:'', decision:''}, pendingProfile = null;
 function profileList(name) {
   const saved = config?.model_profiles?.[name];
   if (saved?.length) return saved;
   const current = config?.[name] || {};
-  return [{id: name === 'llm' ? 'current-llm' : 'current-tts', name: '当前配置', ...current}];
+  const synthetic = {llm:'current-llm', tts:'current-tts', decision:'current-decision'};
+  return [{id: synthetic[name], name: '当前配置', ...current}];
 }
 function renderModelProfiles() {
-  for (const name of ['llm', 'tts']) {
+  for (const name of profileKinds) {
     const form = $('#' + name + '-form');
     const select = form.querySelector('[data-profile-id]');
     const profiles = profileList(name);
@@ -824,17 +826,11 @@ function showModelProfile(name) {
     form.elements.vision_api_key.value = '';
     form.elements.clear_vision_api_key.checked = false;
     $('.vision-key-state', form).textContent = vision.api_key_configured ? '已配置' : '留空则沿用模型密钥';
-    const decision = chosen.decision || {};
-    const fallback = decision.fallback || {};
-    form.elements.decision_enabled.checked = decision.enabled === true;
-    form.elements.decision_base_url.value = decision.base_url || '';
-    form.elements.decision_model.value = decision.model || '';
-    form.elements.decision_api_key.value = '';
-    form.elements.decision_timeout_seconds.value = decision.timeout_seconds ?? 20;
-    form.elements.decision_fallback_speak.value = fallback.speak ?? 0.3;
-    form.elements.decision_fallback_voice.value = fallback.voice ?? 0.3;
-    form.elements.clear_decision_api_key.checked = false;
-    $('.decision-key-state', form).textContent = decision.api_key_configured ? '已配置' : '尚未配置';
+  }
+  if (name === 'decision') {
+    const fallback = chosen.fallback || {};
+    form.elements.fallback_speak.value = fallback.speak ?? 0.3;
+    form.elements.fallback_voice.value = fallback.voice ?? 0.3;
   }
   form.querySelector('[data-profile-name]').value = chosen.name || '';
 }
@@ -861,24 +857,22 @@ function readModelForm(form, name) {
       base_url: String(values.vision_base_url || '').trim(),
       api_key: values.vision_api_key || '',
     };
-    values.decision = {
-      enabled: values.decision_enabled === true,
-      base_url: String(values.decision_base_url || '').trim(),
-      model: String(values.decision_model || '').trim(),
-      api_key: values.decision_api_key || '',
-      timeout_seconds: values.decision_timeout_seconds,
-      fallback: {speak: values.decision_fallback_speak, voice: values.decision_fallback_voice},
-    };
     for (const key of ['web_search_enabled', 'web_search_provider', 'web_search_base_url', 'web_search_api_key', 'web_search_timeout_seconds', 'web_search_count',
-      'vision_model', 'vision_base_url', 'vision_api_key',
-      'decision_enabled', 'decision_base_url', 'decision_model', 'decision_api_key', 'decision_timeout_seconds', 'decision_fallback_speak', 'decision_fallback_voice']) delete values[key];
+      'vision_model', 'vision_base_url', 'vision_api_key']) delete values[key];
+  }
+  if (name === 'decision') {
+    values.base_url = String(values.base_url || '').trim();
+    values.model = String(values.model || '').trim();
+    values.fallback = {speak: values.fallback_speak, voice: values.fallback_voice};
+    delete values.fallback_speak;
+    delete values.fallback_voice;
   }
   return values;
 }
 function profileRequest(form, action) {
   return {action, id: form.querySelector('[data-profile-id]').value, name: form.querySelector('[data-profile-name]').value.trim()};
 }
-for (const name of ['llm','tts']) {
+for (const name of profileKinds) {
   const form = $('#'+name+'-form');
   form.onsubmit = event => {
     event.preventDefault();

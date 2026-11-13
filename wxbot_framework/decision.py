@@ -10,7 +10,9 @@ import random
 
 from .llm import LLMError, acceptable_url, post_json
 
-DEFAULT_BASE_URL = "https://emrank.tech/v1"
+DEFAULT_BASE_URL = "https://emrank.tech/v1/decisions"
+# 早期默认只写到 /v1，路径由代码补上。现在地址原样使用，读到这一条旧值时改成完整地址。
+_LEGACY_BASE_URL = "https://emrank.tech/v1"
 DEFAULT_MODEL = "typesafe/jev[slow]"
 DECISIONS = ("speak", "voice")
 DEFAULT_FALLBACK = {"speak": 0.3, "voice": 0.3}
@@ -36,6 +38,8 @@ def normalize_decision(raw):
     if not isinstance(base_url, str):
         raise ValueError("decision.base_url 应为地址字符串")
     base_url = base_url.strip().rstrip("/") or DEFAULT_BASE_URL
+    if base_url == _LEGACY_BASE_URL:
+        base_url = DEFAULT_BASE_URL
     if not acceptable_url(base_url):
         raise ValueError("decision.base_url 应为不含认证信息的 HTTPS 地址；本机回环地址可使用 HTTP")
     api_key = raw.get("api_key", "")
@@ -104,7 +108,7 @@ class Decider:
                 "questions": {name: {"type": "noul", "instructions": instructions,
                                      "criteria": {"true": criteria[0], "false": criteria[1]}}}}
         try:
-            result = post_json(self.options["base_url"] + "/decisions", body, self.options["timeout_seconds"],
+            result = post_json(self.options["base_url"], body, self.options["timeout_seconds"],
                                self.options["api_key"], label="决策模型")
             value = result["answers"][name]["noul"]
         except LLMError as error:

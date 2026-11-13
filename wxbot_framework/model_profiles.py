@@ -1,4 +1,4 @@
-"""大模型和语音各自的配置库。正在使用的那份仍写回原来的配置文件。"""
+"""大模型、语音和决策模型各自的配置库。正在使用的那份仍写回原来的配置文件。"""
 from __future__ import annotations
 
 import json
@@ -7,11 +7,13 @@ from pathlib import Path
 
 FILENAME = "model_profiles.json"
 MAX_PROFILES = 12
-SYNTHETIC = {"llm": "current-llm", "tts": "current-tts"}
+KINDS = ("llm", "tts", "decision")
+SYNTHETIC = {"llm": "current-llm", "tts": "current-tts", "decision": "current-decision"}
 FIELDS = {
     "llm": ("base_url", "model", "timeout_seconds", "max_tokens", "json_mode",
-            "token_limit_parameter", "extra_body", "web_search", "vision", "decision"),
+            "token_limit_parameter", "extra_body", "web_search", "vision"),
     "tts": ("provider", "base_url", "model", "timeout_seconds", "default_voice", "max_chars_per_clip"),
+    "decision": ("enabled", "base_url", "model", "timeout_seconds", "fallback"),
 }
 
 
@@ -21,19 +23,16 @@ class ProfileError(ValueError):
 
 def _blocks():
     """llm 配置里带独立密钥的几块：名称 -> (校验函数, 网页可改的字段, 网页视图函数)。"""
-    from .decision import normalize_decision, public_decision
     from .llm import normalize_vision, normalize_web_search, public_vision, public_web_search
     return {
         "web_search": (normalize_web_search, ("enabled", "provider", "base_url", "timeout_seconds", "count"),
                        public_web_search),
         "vision": (normalize_vision, ("base_url", "model"), public_vision),
-        "decision": (normalize_decision, ("enabled", "base_url", "model", "timeout_seconds", "fallback"),
-                     public_decision),
     }
 
 
 def blank():
-    return {"llm": [], "tts": [], "active": {"llm": "", "tts": ""}}
+    return {kind: [] for kind in KINDS} | {"active": {kind: "" for kind in KINDS}}
 
 
 def load_profiles(path):
@@ -47,7 +46,7 @@ def load_profiles(path):
     if not isinstance(raw, dict):
         return blank()
     library = blank()
-    for kind in ("llm", "tts"):
+    for kind in KINDS:
         items = raw.get(kind) or []
         if not isinstance(items, list):
             continue
@@ -57,13 +56,14 @@ def load_profiles(path):
         chosen = raw.get("active", {}).get(kind) if isinstance(raw.get("active"), dict) else ""
         ids = [item["id"] for item in library[kind]]
         library["active"][kind] = chosen if chosen in ids else (ids[0] if ids else "")
+    _lift_embedded_decisions(library)
     return library
 
 
 def view_library(library, documents):
     """给页面的配置列表。密钥只保留是否已配置，不返回原文。"""
     shown = {"active": {}}
-    for kind in ("llm", "tts"):
+    for kind in KINDS:
         items = list(library.get(kind) or [])
         active = (library.get("active") or {}).get(kind) or ""
         if not items:
@@ -226,6 +226,9 @@ def _overlay(existing, doc, kind):
         if key in doc:
             merged[key] = doc[key]
     merged["api_key"] = doc.get("api_key") or ""
+    if kind == "llm":
+        # 决策模型已经单独成档，保存大模型时丢掉旧的内嵌配置。
+        merged.pop("decision", None)
     return merged
 
 
@@ -247,7 +250,29 @@ def _name(value, items, *, own_id=None, suffix=False):
     raise ProfileError("同名配置太多")
 
 
+def _lift_embedded_decisions(library):
+    """旧的决策配置写在每一份大模型里。拆成独立的一份，编号跟着原来的模型配置走。"""
+    embedded = []
+    for item in library["llm"]:
+        raw = item.pop("decision", None)
+        if isinstance(raw, dict):
+            embedded.append((item, raw))
+    if library["decision"] or not embedded:
+        return
+    library["decision"] = [_stored("decision", raw, item["name"], "d-" + item["id"]) for item, raw in embedded]
+    chosen = "d-" + library["active"]["llm"]
+    ids = [item["id"] for item in library["decision"]]
+    library["active"]["decision"] = chosen if chosen in ids else ids[0]
+
+
 def _validate(kind, doc):
+    if kind == "decision":
+        from .decision import normalize_decision
+        try:
+            normalize_decision(doc)
+        except ValueError as error:
+            raise ProfileError(str(error)) from error
+        return
     trial = dict(doc, api_key=doc.get("api_key") or "validation-only")
     if kind == "llm":
         from .llm import LLMClient

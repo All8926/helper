@@ -408,8 +408,16 @@ class LLMClient:
         self._options = options
 
     @classmethod
-    def from_file(cls, path):
-        return cls(json.loads(Path(path).read_text(encoding="utf-8-sig")))
+    def from_file(cls, path, decision_path=None):
+        options = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        if not isinstance(options, dict):
+            raise ValueError("大模型配置必须是 JSON 对象")
+        # 决策模型单独成档。文件还没拆出来时，继续用大模型配置里的旧字段。
+        if decision_path is not None and Path(decision_path).is_file():
+            extra = json.loads(Path(decision_path).read_text(encoding="utf-8-sig"))
+            if isinstance(extra, dict):
+                options["decision"] = extra
+        return cls(options)
 
     @property
     def api_key(self):

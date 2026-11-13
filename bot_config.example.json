@@ -13,6 +13,7 @@
   "log_level": "INFO",
   "llm_config_file": "llm_config.json",
   "tts_config_file": "tts_config.json",
+  "decision_config_file": "decision_config.json",
   "members_config_file": "members_config.json",
   "text_send_delay": {
     "enabled": true,

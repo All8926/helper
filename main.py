@@ -70,7 +70,9 @@ def main():
                         compile(source.read_bytes(), str(source), "exec")
                     if spec.name in ("idiom_chain", "chat_summary", "mention_chat"):
                         from wxbot_framework.llm import LLMClient
-                        LLMClient.from_file(store.path.parent / config.get("llm_config_file", "llm_config.json"))
+                        LLMClient.from_file(
+                            store.path.parent / config.get("llm_config_file", "llm_config.json"),
+                            store.path.parent / config.get("decision_config_file", "decision_config.json"))
                     if spec.name == "voice_reply":
                         from wxbot_framework.tts import open_tts
                         open_tts(store.path.parent / config.get("tts_config_file", "tts_config.json"))

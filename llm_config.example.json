@@ -19,16 +19,5 @@
     "model": "",
     "base_url": "",
     "api_key": ""
-  },
-  "decision": {
-    "enabled": false,
-    "base_url": "https://emrank.tech/v1",
-    "api_key": "",
-    "model": "typesafe/jev[slow]",
-    "timeout_seconds": 20,
-    "fallback": {
-      "speak": 0.3,
-      "voice": 0.3
-    }
   }
 }

@@ -574,14 +574,15 @@ class LegacyService:
 
 
 class PluginContext:
-    def __init__(self, name, options, service, capabilities, *, llm_config_path=None, member_store=None, speech=None,
-                 plugin_active=None):
+    def __init__(self, name, options, service, capabilities, *, llm_config_path=None, decision_config_path=None,
+                 member_store=None, speech=None, plugin_active=None):
         self.name = name
         self.config = MappingProxyType(copy.deepcopy(options))
         self.logger = logging.getLogger(f"Plugin.{name}")
         self.capabilities = frozenset(capabilities)
         self._service = service
         self._llm_config_path = llm_config_path
+        self._decision_config_path = decision_config_path
         self._llm = None
         self._members = member_store
         self._speech = speech
@@ -619,7 +620,7 @@ class PluginContext:
             if self._llm_config_path is None:
                 raise ValueError("尚未配置大模型文件")
             from .llm import LLMClient
-            self._llm = LLMClient.from_file(self._llm_config_path)
+            self._llm = LLMClient.from_file(self._llm_config_path, self._decision_config_path)
         return self._llm
 
     def send_text(self, chat_id, text):

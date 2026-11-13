@@ -504,6 +504,15 @@ class DecisionTests(unittest.TestCase):
         with patch("wxbot_framework.llm.urlopen", return_value=self.answer(0.6)):
             self.assertFalse(decider.yes("speak", "该说话吗", ("该说", "不该说"), {}, threshold=0.7))
 
+    def test_configured_url_is_posted_as_is(self):
+        url = "https://llm.example.test/compatible-mode/v1/systemone"
+        decider = Decider({**self.options, "base_url": url + "/"})
+        with patch("wxbot_framework.llm.urlopen", return_value=self.answer(0.4)) as call:
+            self.assertFalse(decider.yes("speak", "问", ("是", "否"), {"ticket": "T-1"}))
+        self.assertEqual(call.call_args.args[0].full_url, url)
+        self.assertEqual(normalize_decision({"base_url": "https://emrank.tech/v1"})["base_url"],
+                         "https://emrank.tech/v1/decisions")
+
     def test_long_state_keeps_only_the_tail(self):
         with patch("wxbot_framework.llm.urlopen", return_value=self.answer(0.9)) as call:
             Decider(self.options).yes("speak", "问", ("是", "否"), {"chat": "旧" * 20000 + "最新"})

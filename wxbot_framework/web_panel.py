@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 
-from .config import ConfigStore, account_is_unbound, initialize_configs, validate_name
+from .config import ConfigStore, account_is_unbound, ensure_decision_config, initialize_configs, validate_name
 from .locking import InstanceLock
 from .panel_common import PanelError as PanelError, redact as redact, redact_full
 from .panel_http import PanelHandler as PanelHandler, PanelServer as PanelServer
@@ -97,6 +97,7 @@ class PanelController:
                 if not target.exists():
                     with target.open('x', encoding='utf-8') as output:
                         output.write((self.root / (stem + '.example.json')).read_text(encoding='utf-8-sig'))
+        ensure_decision_config(self.workspace, self.root / 'decision_config.example.json')
         self.store = ConfigStore(self.workspace / 'bot_config.json')
         self.plugin_sources = PluginSources(self.root / 'plugins', self.workspace)
         self.factory, self.scan, self.lock_factory = app_factory, scan, lock_factory
@@ -124,6 +125,7 @@ class PanelController:
         return {name: (self.workspace / config.get(field, default)).resolve()
                 for name, field, default in [('llm', 'llm_config_file', 'llm_config.json'),
                     ('tts', 'tts_config_file', 'tts_config.json'),
+                    ('decision', 'decision_config_file', 'decision_config.json'),
                     ('members', 'members_config_file', 'members_config.json')]
                 if config.get(field, default) is not None}
 
@@ -315,23 +317,26 @@ class PanelController:
         raw_models = {}
         for name, path in paths.items():
             value = deepcopy(read_json(path))
-            if name in ('llm', 'tts'):
+            if name in ('llm', 'tts', 'decision'):
                 raw_models[name] = value
-                result[name] = {key: value[key] for key in
-                    ('provider', 'base_url', 'model', 'timeout_seconds', 'max_tokens', 'json_mode',
-                     'token_limit_parameter', 'extra_body', 'default_voice', 'max_chars_per_clip') if key in value}
-                if name == 'llm':
-                    for key, default in (('json_mode', True), ('token_limit_parameter', 'max_tokens'), ('extra_body', {})):
-                        result[name].setdefault(key, default)
+                if name == 'decision':
                     from .decision import public_decision
-                    from .llm import public_vision, public_web_search
-                    result[name]['web_search'] = public_web_search(value.get('web_search'))
-                    result[name]['vision'] = public_vision(value.get('vision'))
-                    result[name]['decision'] = public_decision(value.get('decision'))
-                if name == 'tts':
-                    result[name].setdefault('provider', 'fish')
-                result[name]['api_key_configured'] = bool(value.get('api_key'))
-                result[name]['api_key'] = value.get('api_key') or ''
+                    result[name] = public_decision(value)
+                    result[name]['api_key'] = value.get('api_key') or ''
+                else:
+                    result[name] = {key: value[key] for key in
+                        ('provider', 'base_url', 'model', 'timeout_seconds', 'max_tokens', 'json_mode',
+                         'token_limit_parameter', 'extra_body', 'default_voice', 'max_chars_per_clip') if key in value}
+                    if name == 'llm':
+                        for key, default in (('json_mode', True), ('token_limit_parameter', 'max_tokens'), ('extra_body', {})):
+                            result[name].setdefault(key, default)
+                        from .llm import public_vision, public_web_search
+                        result[name]['web_search'] = public_web_search(value.get('web_search'))
+                        result[name]['vision'] = public_vision(value.get('vision'))
+                    if name == 'tts':
+                        result[name].setdefault('provider', 'fish')
+                    result[name]['api_key_configured'] = bool(value.get('api_key'))
+                    result[name]['api_key'] = value.get('api_key') or ''
             else:
                 result['groups'] = list(value.get('groups', {}))
                 result['group_names'] = value.get('group_names', {})
@@ -386,7 +391,7 @@ class PanelController:
                 config['text_send_delay'] = data['text_send_delay']
             library = None
             profiles_path = self.workspace / PROFILE_FILENAME
-            for name in ('llm', 'tts'):
+            for name in ('llm', 'tts', 'decision'):
                 request = data.get(name + '_profile')
                 incoming = data.get(name)
                 if request is None and incoming is None:

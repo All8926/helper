@@ -236,31 +236,88 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['web_search']['api_key'], '')
         self.assertFalse(read_json(path)['web_search']['enabled'])
 
-    def test_vision_and_decision_blocks_keep_and_hide_their_keys(self):
+    def test_vision_hides_its_key_and_decision_is_its_own_profile(self):
         path = self.root/'llm_config.json'
         data = read_json(path)
         data['api_key'] = 'model-secret'
         path.write_text(json.dumps(data), encoding='utf-8')
         self.controller.save_configuration({'llm': {
-            'vision': {'model': 'qwen-vl', 'base_url': '', 'api_key': 'vision-secret'},
-            'decision': {'enabled': True, 'base_url': 'https://emrank.tech/v1', 'model': 'typesafe/jev[slow]',
-                         'api_key': 'decision-secret', 'timeout_seconds': 20,
-                         'fallback': {'speak': 0.4, 'voice': 0.1}}}})
+            'vision': {'model': 'qwen-vl', 'base_url': '', 'api_key': 'vision-secret'}}})
+        decision = {'enabled': True, 'base_url': 'https://llm.example.test/compatible-mode/v1/systemone',
+                    'model': 'decision-model-preview', 'api_key': 'decision-secret', 'timeout_seconds': 20,
+                    'fallback': {'speak': 0.4, 'voice': 0.1}}
+        self.controller.save_configuration({'decision': decision,
+            'decision_profile': {'action': 'save', 'id': 'current-decision', 'name': '百炼'}})
         stored = read_json(path)
-        self.assertEqual((stored['vision']['api_key'], stored['decision']['api_key']), ('vision-secret', 'decision-secret'))
-        self.assertEqual(stored['decision']['fallback'], {'speak': 0.4, 'voice': 0.1})
-        shown = self.controller.configuration()['llm']
-        for name in ('vision', 'decision'):
-            self.assertNotIn('api_key', shown[name])
-            self.assertTrue(shown[name]['api_key_configured'])
-        self.controller.save_configuration({'llm': {
-            'vision': {'model': 'qwen-vl', 'base_url': '', 'api_key': ''},
-            'clear_decision_api_key': True,
-            'decision': {'enabled': False, 'api_key': '', 'fallback': {'speak': 0.4, 'voice': 0.1}}}})
-        stored = read_json(path)
-        self.assertEqual((stored['vision']['api_key'], stored['decision']['api_key']), ('vision-secret', ''))
+        self.assertEqual(stored['vision']['api_key'], 'vision-secret')
+        self.assertNotIn('decision', stored)
+        saved = read_json(self.root/'decision_config.json')
+        self.assertEqual(saved['api_key'], 'decision-secret')
+        self.assertEqual(saved['base_url'], decision['base_url'])
+        self.assertEqual(saved['fallback'], decision['fallback'])
+        shown = self.controller.configuration()
+        self.assertNotIn('api_key', shown['llm']['vision'])
+        self.assertTrue(shown['llm']['vision']['api_key_configured'])
+        self.assertNotIn('decision', shown['llm'])
+        self.assertEqual(shown['decision']['base_url'], decision['base_url'])
+        self.assertTrue(shown['decision']['api_key_configured'])
+        library = read_json(self.root/'model_profiles.json')
+        self.assertEqual(library['active']['decision'], 'current-decision')
+        self.assertEqual(library['decision'][0]['name'], '百炼')
+        # 密钥留空表示保留。
+        self.controller.save_configuration({'decision': {'enabled': True, 'api_key': '', 'fallback': decision['fallback']},
+            'decision_profile': {'action': 'save', 'id': 'current-decision', 'name': '百炼'}})
+        self.assertEqual(read_json(self.root/'decision_config.json')['api_key'], 'decision-secret')
+        self.controller.save_configuration({'decision': {'enabled': False, 'api_key': '', 'clear_api_key': True,
+                                                         'fallback': decision['fallback']},
+            'decision_profile': {'action': 'save', 'id': 'current-decision', 'name': '百炼'}})
+        self.assertEqual(read_json(self.root/'decision_config.json')['api_key'], '')
         with self.assertRaises(PanelError):
-            self.controller.save_configuration({'llm': {'decision': {'enabled': True, 'fallback': {'speak': 2}}}})
+            self.controller.save_configuration({'decision': {'enabled': True, 'fallback': {'speak': 2}},
+                'decision_profile': {'action': 'save', 'id': 'current-decision', 'name': '百炼'}})
+
+    def test_decision_profiles_switch_without_touching_the_model(self):
+        self.controller.save_configuration({'decision': {
+            'enabled': False, 'base_url': 'https://emrank.tech/v1/decisions', 'model': 'typesafe/jev[slow]',
+            'api_key': 'first-key', 'timeout_seconds': 20, 'fallback': {'speak': 0.3, 'voice': 0.3}},
+            'decision_profile': {'action': 'save', 'id': 'current-decision', 'name': 'emrank'}})
+        self.controller.save_configuration({'decision': {
+            'enabled': True, 'base_url': 'https://llm.example.test/compatible-mode/v1/systemone',
+            'model': 'decision-model-preview', 'api_key': 'second-key', 'timeout_seconds': 20,
+            'fallback': {'speak': 0.2, 'voice': 0.2}},
+            'decision_profile': {'action': 'add', 'name': '百炼'}})
+        library = read_json(self.root/'model_profiles.json')
+        added = library['decision'][1]
+        self.assertEqual(library['active']['decision'], 'current-decision')
+        self.assertEqual(read_json(self.root/'decision_config.json')['model'], 'typesafe/jev[slow]')
+        before = read_json(self.root/'llm_config.json')
+        self.controller.save_configuration({'decision_profile': {'action': 'use', 'id': added['id']}})
+        self.assertEqual(read_json(self.root/'decision_config.json')['model'], 'decision-model-preview')
+        self.assertEqual(read_json(self.root/'model_profiles.json')['active']['decision'], added['id'])
+        self.assertEqual(read_json(self.root/'llm_config.json'), before)
+
+    def test_legacy_decision_block_is_split_into_its_own_file_and_profiles(self):
+        from wxbot_framework.config import ensure_decision_config
+        from wxbot_framework.model_profiles import load_profiles
+        folder = self.root / 'legacy'
+        folder.mkdir()
+        (folder / 'llm_config.json').write_text(json.dumps({
+            'base_url': 'https://api.deepseek.com', 'api_key': 'model-key', 'model': 'deepseek-flash',
+            'decision': {'enabled': False, 'base_url': 'https://llm.example.test/systemone',
+                         'api_key': 'decision-key', 'model': 'decision-model-preview'}}), encoding='utf-8')
+        self.assertTrue(ensure_decision_config(folder, ROOT / 'decision_config.example.json'))
+        self.assertEqual(read_json(folder / 'decision_config.json')['model'], 'decision-model-preview')
+        self.assertNotIn('decision', read_json(folder / 'llm_config.json'))
+        profiles = self.root / 'model_profiles.json'
+        profiles.write_text(json.dumps({
+            'llm': [{'id': 'current-llm', 'name': '主力', 'api_key': 'k', 'model': 'm',
+                     'decision': {'enabled': True, 'base_url': 'https://llm.example.test/a',
+                                  'api_key': 'd', 'model': 'jev'}}],
+            'tts': [], 'active': {'llm': 'current-llm', 'tts': ''}}), encoding='utf-8')
+        library = load_profiles(profiles)
+        self.assertNotIn('decision', library['llm'][0])
+        self.assertEqual(library['decision'][0]['base_url'], 'https://llm.example.test/a')
+        self.assertEqual(library['active']['decision'], 'd-current-llm')
 
     def test_model_profiles_can_be_added_and_switched_without_leaking_keys(self):
         path = self.root/'llm_config.json'

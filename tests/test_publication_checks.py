@@ -12,7 +12,7 @@ class PublicationChecksTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix='helper-publication-synthetic-')
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        for name in ('bot_config','members_config','llm_config','tts_config'):
+        for name in ('bot_config','members_config','llm_config','tts_config','decision_config'):
             (self.root / (name + '.example.json')).write_text('{}', encoding='utf-8')
 
     def test_only_exact_distributed_bridge_paths_are_allowed(self):
