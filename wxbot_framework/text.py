@@ -14,7 +14,7 @@ def own_group_command(text):
     value = text.strip()
     return bool(value in GROUP_CONTROL_COMMANDS or FOUR_CHINESE.fullmatch(value) or
                 value.split(maxsplit=1)[:1] in (["/绑定"], ["/总结"], ["/总结群聊"], ["/切换人格"], ["/清空"],
-                                              ["/查看音色"], ["/音色"], ["/猜"], ["/开启对话"], ["/关闭对话"]))
+                                              ["/查看音色"], ["/音色"], ["/语音"], ["/猜"], ["/开启对话"], ["/关闭对话"]))
 
 
 def validate_target(target):

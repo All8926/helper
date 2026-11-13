@@ -29,10 +29,12 @@ class Plugin:
         if message.type != 1 or not message.is_group or message.chat_id not in self.members.groups:
             return
         parts = message.text.strip().split(maxsplit=1)
-        if not parts or parts[0] not in ('/查看音色', '/音色'):
+        if not parts or parts[0] not in ('/查看音色', '/音色', '/语音'):
             return
         try:
-            if parts[0] == '/查看音色':
+            if parts[0] == '/语音':
+                text = self._switch_mode(message, ctx, parts[1].strip() if len(parts) == 2 else '')
+            elif parts[0] == '/查看音色':
                 query = parts[1].strip() if len(parts) == 2 else ''
                 scope = query.split(maxsplit=1)
                 all_languages = bool(scope and scope[0] == '全部')
@@ -78,7 +80,8 @@ class Plugin:
                 if public.window_limited:
                     sections.append('公开列表受接口浏览范围限制，可按关键词搜索更多音色。')
                 sections.append('/查看音色 关键词：搜索\n/查看音色 全部：查看各国语言音色\n/音色 名称：切换\n'
-                                '/音色 自动：按对话决定语音或文字\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复')
+                                '/音色 自动：按对话决定语音或文字\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复\n'
+                                '/语音 开启|关闭|自动：只改语音方式，不改音色')
                 text = '\n\n'.join(sections)
             elif len(parts) == 1:
                 text = '用法：/音色 名称或ID\n/查看音色：查看列表\n/查看音色 关键词：搜索\n/音色 自动：按对话决定\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复'
@@ -96,3 +99,22 @@ class Plugin:
             ctx.reply(message, str(error))
         except SnapshotExpired:
             ctx.logger.info('音色查询已取消：配置已更新')
+
+    def _switch_mode(self, message, ctx, argument):
+        """只改本群用不用语音。开启是每句都念，自动按门槛决定，关闭只用文字。"""
+        choices = {'关闭': '关闭', '开启': '始终', '自动': '自动'}
+        if argument not in choices:
+            state = self.members.voice_selection(message.chat_id)
+            if not state.enabled or not state.voice_id:
+                current = '关闭'
+            elif state.mode == 'auto':
+                current = '自动'
+            else:
+                current = '开启'
+            return f'本群语音回复：{current}\n/语音 开启：都用语音\n/语音 关闭：只用文字\n/语音 自动：按对话决定'
+        state = ctx.speech.select(message.chat_id, choices[argument])
+        if not state.enabled:
+            return '本群语音回复已关闭，之后只用文字。'
+        if state.mode == 'auto':
+            return '本群语音回复已设为自动，之后按对话决定用语音还是文字。'
+        return '本群语音回复已开启，之后都用语音。'

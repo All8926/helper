@@ -1,8 +1,10 @@
 """文本发送前的可配置随机等待；仅控制节奏，不保证账号风控结果。"""
 from __future__ import annotations
 
+import contextvars
 import math
 import random
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 
@@ -40,3 +42,58 @@ class TextSendDelay:
         # 按 Unicode 字符计数；不足一组向上取整，每组独立抽取等待时间。
         groups = (len(text) + self.characters_per_group - 1) // self.characters_per_group
         return sum(random.uniform(self.min_seconds, self.max_seconds) for _ in range(groups))
+
+
+class SendClock:
+    """一次回复里，文字等待、语音合成和微信发送各自用了多久。"""
+
+    def __init__(self):
+        self.wait = 0.0
+        self.synth = 0.0
+        self.native = 0.0
+
+
+_clock = contextvars.ContextVar("helper_send_clock", default=None)
+
+
+@contextmanager
+def counting_send():
+    clock = SendClock()
+    token = _clock.set(clock)
+    try:
+        yield clock
+    finally:
+        _clock.reset(token)
+
+
+def note_wait(seconds):
+    clock = _clock.get()
+    if clock is not None:
+        clock.wait += seconds
+
+
+def note_synth(seconds):
+    clock = _clock.get()
+    if clock is not None:
+        clock.synth += seconds
+
+
+def note_native(seconds):
+    clock = _clock.get()
+    if clock is not None:
+        clock.native += seconds
+
+
+def describe_send(clock, total):
+    """把发送总时长拆成能看懂的几段。不足 0.01 秒的段不写。"""
+    parts = []
+    if clock.wait >= 0.01:
+        parts.append(f"文字等待 {clock.wait:.2f}秒")
+    if clock.synth >= 0.01:
+        parts.append(f"语音合成 {clock.synth:.2f}秒")
+    if clock.native >= 0.01:
+        parts.append(f"微信发送 {clock.native:.2f}秒")
+    rest = total - clock.wait - clock.synth - clock.native
+    if rest >= 0.05 or not parts:
+        parts.append(f"其余 {max(rest, 0):.2f}秒")
+    return " | ".join(parts)

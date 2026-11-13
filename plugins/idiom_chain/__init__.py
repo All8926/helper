@@ -10,7 +10,7 @@ from wxbot_framework.personality import game_reply, personality_text
 from wxbot_framework.text import GROUP_CONTROL_COMMANDS, FOUR_CHINESE, validate_mentions
 from .judge import IdiomJudge
 
-HELP = "1. 成语接龙\n\n2. 看图猜成语\n\n3. /绑定 昵称\n\n4. /总结 昵称\n\n5. /总结群聊\n\n6. /切换人格 名称|取消\n\n7. 艾特机器人，或叫本群配置的别名。管理员可发 /开启对话、/关闭对话\n\n8. /查看音色\n\n9. /音色 名称|关闭\n\n10. /清空\n\n11. /来张图\n\n12. /help"
+HELP = "1. 成语接龙\n\n2. 看图猜成语\n\n3. /绑定 昵称\n\n4. /总结 昵称\n\n5. /总结群聊\n\n6. /切换人格 名称|取消\n\n7. 艾特机器人，或叫本群配置的别名。管理员可发 /开启对话、/关闭对话\n\n8. /查看音色\n\n9. /音色 名称|关闭\n\n10. /语音 开启|关闭|自动\n\n11. /清空\n\n12. /来张图\n\n13. /help"
 
 
 @dataclass

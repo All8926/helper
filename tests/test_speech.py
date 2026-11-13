@@ -128,6 +128,29 @@ class SpeechTests(unittest.TestCase):
         self.client.synthesize.assert_not_called()
         self.assertTrue(own_group_command('/查看音色'))
         self.assertTrue(own_group_command('/音色 测试乙'))
+        self.assertTrue(own_group_command('/语音 自动'))
+
+    def test_voice_command_changes_mode_and_keeps_the_voice(self):
+        self.setup_speech()
+        plugin = Plugin()
+        plugin.members = self.store
+        plugin.on_message(self.message('/语音 开启'), self.ctx)
+        self.assertIn('请先用 /音色', self.backend.sent[-1][1])
+        plugin.on_message(self.message('/音色 测试甲'), self.ctx)
+        plugin.on_message(self.message('/语音 自动'), self.ctx)
+        state = self.store.voice_selection(ROOM)
+        self.assertEqual((state.enabled, state.mode, state.voice_id), (True, 'auto', FIRST.id))
+        self.assertIn('自动', self.backend.sent[-1][1])
+        plugin.on_message(self.message('/语音 关闭'), self.ctx)
+        self.assertFalse(self.store.voice_selection(ROOM).enabled)
+        self.assertEqual(self.store.voice_selection(ROOM).voice_id, FIRST.id)
+        plugin.on_message(self.message('/语音 开启'), self.ctx)
+        state = self.store.voice_selection(ROOM)
+        self.assertEqual((state.enabled, state.mode, state.name), (True, 'always', FIRST.name))
+        plugin.on_message(self.message('/语音'), self.ctx)
+        self.assertIn('本群语音回复：开启', self.backend.sent[-1][1])
+        plugin.on_message(self.message('/语音 随便'), self.ctx)
+        self.assertIn('/语音 开启', self.backend.sent[-1][1])
 
     def test_mention_model_output_uses_speech_and_keeps_personality_context(self):
         self.setup_speech()

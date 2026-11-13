@@ -10,6 +10,7 @@ import threading
 import time
 
 from .members import SnapshotExpired
+from .pacing import note_synth
 from .summary import split_text
 from .tts import TTSError, open_tts
 
@@ -241,13 +242,11 @@ class SpeechController:
                 paths.append(path)
             with guard():
                 pass
-            send_started = time.perf_counter()
             for path in paths:
                 if not ctx.reply_voice(message, path, delivery_guard=guard):
                     # 微信是否已送达不确定，不在此处重复发文字或重试。
                     raise RuntimeError("原生语音发送未确认成功")
-            ctx.logger.info("语音耗时 | 群=%s | 合成 %.2f秒 | %d段 | 发送 %.2f秒",
-                            message.chat_id, synth_seconds, len(paths), time.perf_counter() - send_started)
+            note_synth(synth_seconds)
         return True
 
 

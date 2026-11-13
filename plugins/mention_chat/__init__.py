@@ -14,6 +14,7 @@ from wxbot_framework.llm import LLMError
 from wxbot_framework.members import BEIJING, SnapshotExpired
 from wxbot_framework.memory import MemoryWorker, public_diary, public_memory
 from wxbot_framework.mentions import strip_at_labels
+from wxbot_framework.pacing import counting_send, describe_send
 from wxbot_framework.personality import PersonalityExpired, personality_text
 from wxbot_framework.quoted import reference
 from wxbot_framework.room_behavior import is_slash_command
@@ -102,10 +103,10 @@ class Plugin:
             snapshot = self.members.conversation_snapshot(message)
             prepared = time.perf_counter()
             guard = lambda: ctx.response_guard(snapshot, personality)
-            model_seconds, send_seconds = self.reply_to_member(message, ctx, snapshot, personality, guard)
-            ctx.logger.info("回复耗时 | 群=%s | 人格=%s | 送给模型=%d条 | 窗口=%d条 %.2f秒 | 调用模型 %.2f秒 | 发送含等待 %.2f秒 | 合计 %.2f秒",
+            model_seconds, send_seconds, send_detail = self.reply_to_member(message, ctx, snapshot, personality, guard)
+            ctx.logger.info("回复耗时 | 群=%s | 人格=%s | 送给模型=%d条 | 窗口=%d条 %.2f秒 | 调用模型 %.2f秒 | 发送 %.2f秒（%s） | 合计 %.2f秒",
                             room, personality.name, len(working_messages(snapshot.messages)), len(snapshot.messages),
-                            prepared - started, model_seconds, send_seconds, time.perf_counter() - started)
+                            prepared - started, model_seconds, send_seconds, send_detail, time.perf_counter() - started)
         except SnapshotExpired:
             ctx.logger.info("艾特对话已取消：记录或人格状态已变更")
         except LLMError as error:
@@ -132,7 +133,8 @@ class Plugin:
         reply = personality_text(reply, personality.name)
         speak = self._voice(ctx, room, snapshot.current, reply, snapshot.messages)
         model_seconds = time.perf_counter() - started
-        return model_seconds, self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
+        send_seconds, send_detail = self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
+        return model_seconds, send_seconds, send_detail
 
     def _remember_image(self, message):
         """下载完成后记下群图片。没点名之前不调用模型。"""
@@ -177,8 +179,10 @@ class Plugin:
     def _deliver(self, message, ctx, snapshot, reply, delivery_guard, speak=None):
         display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
         started = time.perf_counter()
-        deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard, speak=speak)
+        with counting_send() as clock:
+            deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard, speak=speak)
         send_seconds = time.perf_counter() - started
+        send_detail = describe_send(clock, send_seconds)
         self.listener.bot_spoke(message.chat_id)
         # 发出去之后才记。写库失败不影响已经发出的回复。
         try:
@@ -189,7 +193,7 @@ class Plugin:
             self._remember(message, snapshot, reply)
         except Exception:
             ctx.logger.warning("回复已发出，个人档案没有排队")
-        return send_seconds
+        return send_seconds, send_detail
 
     def _remember(self, message, snapshot, reply):
         """档案在发出之后才排队，不占用这次回复的等待。"""

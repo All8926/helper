@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Mapping, Any
 
 from .text import validate_target, validate_mentions
-from .pacing import TextSendDelay
+from .pacing import TextSendDelay, note_native, note_wait
 from .images import validate_image_path
 
 logger = logging.getLogger("TextSend")
@@ -179,8 +179,11 @@ class ServiceFacade:
                     self._check_pending(backend, cancel)
                 seconds = self.text_delay.seconds_for(part)
                 logger.debug("文本发送等待 %.3f 秒（%d 个字符）", seconds, len(part))
+                waited = time.perf_counter()
                 if cancel.wait(seconds):
                     raise RuntimeError("微信连接已结束，取消待发送文本；前面部分可能已发送")
+                note_wait(time.perf_counter() - waited)
+                native = time.perf_counter()
                 with self._lock:
                     self._check_pending(backend, cancel)
                     with delivery_guard() if delivery_guard is not None else nullcontext():
@@ -189,6 +192,7 @@ class ServiceFacade:
                         else:
                             result = backend.send_text(to_wxid, part)
                         self._sent(result, backend, to_wxid, 1, text=part)
+                note_native(time.perf_counter() - native)
                 if result is False:
                     return False
                 start = end
@@ -214,13 +218,17 @@ class ServiceFacade:
         with self._send_lock:
             with self._lock:
                 self._check_pending(backend, cancel)
+            waited = time.perf_counter()
             if cancel.wait(self.text_delay.seconds_for(content)):
                 raise RuntimeError("微信连接已结束，取消待发送引用回复")
+            note_wait(time.perf_counter() - waited)
+            native = time.perf_counter()
             with self._lock:
                 self._check_pending(backend, cancel)
                 with delivery_guard() if delivery_guard is not None else nullcontext():
                     self._check_pending(backend, cancel)
                     result = backend.send_quote_text(message.chat_id, original_id, content)
+                    note_native(time.perf_counter() - native)
                     if result is False:
                         return False
                     author = message.data.get('sender_wechat_name') or ''
@@ -286,11 +294,14 @@ class ServiceFacade:
             with self._lock:
                 self._check_pending(backend, cancel)
             voice = inspect_voice_file(voice.path)
+            native = time.perf_counter()
             with self._lock:
                 self._check_pending(backend, cancel)
                 with delivery_guard() if delivery_guard is not None else nullcontext():
                     self._check_pending(backend, cancel)
-                    return self._sent(backend.send_voice(to_wxid, str(voice.path)), backend, to_wxid, 34)
+                    result = self._sent(backend.send_voice(to_wxid, str(voice.path)), backend, to_wxid, 34)
+            note_native(time.perf_counter() - native)
+            return result
 
     def send_file(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
         validate_target(to_wxid)
