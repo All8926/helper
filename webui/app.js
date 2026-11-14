@@ -333,6 +333,7 @@ function readBehaviorForm() {
     speak_threshold: contextDecimal($('#behavior-speak').value, 0.5),
     voice_mode: $('#behavior-voice').value,
     voice_threshold: contextDecimal($('#behavior-voice-threshold').value, 0.6),
+    sing_threshold: contextDecimal($('#behavior-sing').value, 0.85),
     voice_id: $('#behavior-voice-id').value.trim(),
     deep_thinking: $('#behavior-thinking').checked,
     plugin_options: readNoticeOptions()};
@@ -406,6 +407,7 @@ function showBehavior(room) {
   const legacyVoice = Number.isInteger(saved.voice_rate) && saved.voice_rate >= 1 && saved.voice_rate <= 10
     ? Math.round((0.85 - 0.05 * saved.voice_rate) * 100) / 100 : 0.6;
   $('#behavior-voice-threshold').value = Number.isFinite(Number(saved.voice_threshold)) ? saved.voice_threshold : legacyVoice;
+  $('#behavior-sing').value = Number.isFinite(Number(saved.sing_threshold)) ? saved.sing_threshold : 0.85;
   $('#behavior-voice-id').value = saved.voice_id != null ? saved.voice_id : (voice.voice_id || '');
   $('#behavior-thinking').checked = saved.deep_thinking !== false;
   const voiceHint = $('#behavior-voice-hint');
@@ -567,7 +569,7 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-speak', 'behavior-voice', 'behavior-voice-threshold', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-speak', 'behavior-voice', 'behavior-voice-threshold', 'behavior-sing', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-recall').onchange = () => { behaviorDirty = true; };
 $('#behavior-recall-local').onchange = () => { behaviorDirty = true; };
@@ -1078,6 +1080,7 @@ function renderLogs(){
   $('#log-count').textContent=rows.length+' 条';view.scrollTop=paused?previousTop:view.scrollHeight;
 }
 $('#pause-logs').onclick=()=>{paused=!paused;$('#pause-logs').textContent=paused?'继续滚动':'暂停滚动';};
+$('#scroll-logs').onclick=()=>{$('#log-list').scrollTop=$('#log-list').scrollHeight;};
 $('#clear-logs').onclick=()=>{logs=[];renderLogs();};$('#log-level').onchange=renderLogs;
 function contactConnectionIdentity() {
   return JSON.stringify([robot,state?.account,state?.pid,state?.started_at]);

@@ -139,12 +139,13 @@
               <label for="behavior-speak">说话门槛（0–1）<input id="behavior-speak" type="number" min="0" max="1" step="0.05" value="0.5"></label>
             </div>
             <p class="group-name-hint">关闭时只在被艾特、叫别名或引用它的话时回复。开启后有两种时机：机器人说完话 3 分钟内有人发言，等群里安静几秒再判断；平时每隔「看群间隔」看一眼，有新发言就判断，0 表示不按间隔看。决策模型给出的概率达到「说话门槛」才说，默认 0.5，越高越少开口。该说就直接发到群里，不引用、不艾特。「每小时最多主动说几句」只限制按间隔看群时说的话。</p>
-            <div class="field-pair">
+            <div class="field-pair three">
               <label for="behavior-voice">语音回复<select id="behavior-voice"><option value="off">关闭（文字）</option><option value="always">始终语音</option><option value="auto">自动</option></select></label>
               <label for="behavior-voice-threshold">语音门槛（0–1）<input id="behavior-voice-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>
+              <label for="behavior-sing">清唱门槛（0–1）<input id="behavior-sing" type="number" min="0" max="1" step="0.05" value="0.85"></label>
             </div>
             <label for="behavior-voice-id">本群音色 ID<input id="behavior-voice-id" spellcheck="false" autocomplete="off" placeholder="留空则用模型与语音里的默认音色 ID"></label>
-            <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念。自动时，决策模型给出的概率达到「语音门槛」才念，默认 0.6，越高越少念。选了语音时最多连续 3 条，再长改文字。音色填 ID，留空时使用「模型与语音」里的默认音色 ID。</p>
+            <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念。自动时，决策模型给出的概率达到「语音门槛」才念，默认 0.6，越高越少念。开了语音且使用 Breeze Blue 时，正文被判成歌词的概率达到「清唱门槛」才唱，默认 0.85，越高越少唱。选了语音时最多连续 3 条，再长改文字。音色填 ID，留空时使用「模型与语音」里的默认音色 ID。</p>
             <label class="inline" for="behavior-thinking"><input id="behavior-thinking" type="checkbox" checked>深度思考</label>
             <p class="group-name-hint">默认开启。DeepSeek 和豆包会打开或关闭深度思考，千问会打开或关闭思考，Grok 只会把思考强度调到高或低。扩展参数里已经写过的思考项仍然优先。</p>
             <label for="behavior-admins">管理员微信 ID</label>
@@ -287,7 +288,7 @@
   </section>
   <section class="page hidden" id="page-logs" aria-labelledby="logs-heading">
     <div class="page-heading"><div><h1 id="logs-heading">运行日志</h1></div></div>
-    <div class="log-toolbar"><label for="log-level">日志级别</label><select id="log-level"><option value="ALL">全部级别</option><option value="WARNING">警告和错误</option><option value="ERROR">仅错误</option></select><span id="log-count">0 条</span><div class="log-actions"><button id="pause-logs" class="secondary">暂停滚动</button><button id="clear-logs" class="text-button">清空视图</button></div></div>
+    <div class="log-toolbar"><label for="log-level">日志级别</label><select id="log-level"><option value="ALL">全部级别</option><option value="WARNING">警告和错误</option><option value="ERROR">仅错误</option></select><span id="log-count">0 条</span><div class="log-actions"><button id="scroll-logs" class="icon-button" type="button" aria-label="滚动到最底部" title="滚动到最底部"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button><button id="pause-logs" class="secondary">暂停滚动</button><button id="clear-logs" class="text-button">清空视图</button></div></div>
     <div class="log-list" id="log-list" role="log" aria-label="实时日志" aria-live="off"><div class="log-empty">暂无日志。</div></div>
   </section>
 

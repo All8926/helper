@@ -782,6 +782,15 @@ class MemberStore:
         except BehaviorError:
             return DEFAULT_VOICE_THRESHOLD
 
+    def room_sing_threshold(self, room):
+        """清唱时，决策概率达到这个数才把正文当成歌词。没写时是 0.85。"""
+        from .room_behavior import BehaviorError, DEFAULT_SING_THRESHOLD, normalize_sing_threshold
+        setting = self.room_settings.get(room) or {}
+        try:
+            return normalize_sing_threshold(setting.get("sing_threshold"))
+        except BehaviorError:
+            return DEFAULT_SING_THRESHOLD
+
     def room_glance_minutes(self, room):
         """未点名回应隔几分钟看一眼群，0 表示不按节拍看。"""
         from .room_behavior import BehaviorError, DEFAULT_GLANCE_MINUTES, normalize_glance_minutes

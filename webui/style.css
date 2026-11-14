@@ -425,6 +425,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
 #log-count { color: var(--quiet); font-size: 12px; font-variant-numeric: tabular-nums; }
 .log-actions { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); }
 .log-actions button { min-height: 34px; font-size: 12px; }
+.log-actions .icon-button { width: 34px; height: 34px; border: 1px solid var(--rule); }
 .log-list { height: 60vh; min-height: 340px; overflow: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 0 0 12px 12px; padding: var(--space-2) var(--space-5); font-family: var(--font-data); font-size: 12px; }
 .log-row { display: grid; grid-template-columns: 64px 60px minmax(0, 1fr); gap: var(--space-3); padding: 10px 0; border-bottom: 1px solid var(--log-rule); line-height: 1.8; }
 .log-time { color: var(--quiet); font-variant-numeric: tabular-nums; }

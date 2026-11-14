@@ -14,6 +14,7 @@ from fake_llm import FakeLLM
 from plugins.mention_chat import Plugin
 from wxbot_framework import proactive as pro
 from wxbot_framework.chat_tools import chat_tools
+from wxbot_framework.dialogue import SING_CRITERIA, sing_state, singable
 from wxbot_framework.llm import LLMError
 from wxbot_framework.room_behavior import BehaviorError, normalize_global_prompt, normalize_reply_limit, normalize_room_setting
 from wxbot_framework.sdk import Message
@@ -39,6 +40,8 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(normalize_room_setting({"voice_rate": 9}, [])["voice_threshold"], 0.4)
         self.assertEqual(normalize_room_setting({"voice_threshold": 0.7, "voice_rate": 1}, [])["voice_threshold"], 0.7)
         self.assertEqual(default["speak_threshold"], 0.5)
+        self.assertEqual(default["sing_threshold"], 0.85)
+        self.assertEqual(normalize_room_setting({"sing_threshold": 0.4}, [])["sing_threshold"], 0.4)
         self.assertEqual(normalize_room_setting({"speak_threshold": 0.8}, [])["speak_threshold"], 0.8)
         self.assertEqual(normalize_room_setting({"speak_threshold": 0}, [])["speak_threshold"], 0.0)
         self.assertNotIn("activity", default)
@@ -57,7 +60,8 @@ class FilterTests(unittest.TestCase):
                 normalize_reply_limit(bad)
         for bad in ({"unnamed_reply": "yes"}, {"glance_minutes": 61}, {"hourly_limit": 31}, {"hourly_limit": True},
                     {"speak_threshold": 1.1}, {"speak_threshold": True},
-                    {"voice_threshold": -0.1}, {"voice_threshold": True}, {"deep_thinking": "yes"}):
+                    {"voice_threshold": -0.1}, {"voice_threshold": True},
+                    {"sing_threshold": 1.2}, {"sing_threshold": True}, {"deep_thinking": "yes"}):
             with self.subTest(bad=bad), self.assertRaises(BehaviorError):
                 normalize_room_setting(bad, [])
 
@@ -175,6 +179,43 @@ class PluginTests(unittest.TestCase):
         self.at("唱一句", 1)
         self.assertEqual(speech.sung, ["这是回答。"])
         self.assertFalse(any("[唱歌]" in str(item) for item in self.backend.sent))
+
+    def test_sing_decision_reads_only_the_full_reply(self):
+        lyric = "想把夜空唱给你听" * 6
+        self.start(unnamed=False, decision={"enabled": True, "api_key": "decision-key"})
+
+        def chat(system, user, tools=(), **_kwargs):
+            return lyric
+
+        self.ctx._llm.chat.side_effect = chat
+
+        class Speech:
+            enabled = True
+            sung = []
+
+            def uses_breeze(self):
+                return True
+
+            def selected(self, room):
+                from types import SimpleNamespace
+                return SimpleNamespace(enabled=True), SimpleNamespace(id="voc_xeh3w54cqvnp")
+
+            def sing(self, ctx, message, text, delivery_guard=None):
+                self.sung.append(text)
+                return True
+
+        self.ctx._speech = Speech()
+        answer = io.BytesIO(json.dumps({"answers": {"sing": {"noul": 0.9}}}).encode())
+        with patch("wxbot_framework.llm.urlopen", return_value=answer) as call:
+            self.at("前面聊了很久的歌", 1)
+        body = json.loads(call.call_args.args[0].data)
+        self.assertEqual(body["questions"]["sing"]["criteria"]["true"], SING_CRITERIA[0])
+        self.assertEqual(body["state"], sing_state(lyric))
+        self.assertNotIn("transcript", body["state"])
+        self.assertGreater(len(lyric), 40)
+        self.assertTrue(singable(lyric))
+        self.assertFalse(singable("看这个 https://example.com/a"))
+        self.assertEqual(self.ctx._speech.sung, [lyric])
 
     def test_unnamed_reply_off_only_answers_mentions(self):
         self.start(unnamed=False)

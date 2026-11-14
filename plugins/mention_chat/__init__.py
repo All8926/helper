@@ -9,9 +9,10 @@ from datetime import datetime
 from wxbot_framework import proactive as pro
 from wxbot_framework.chat_tools import chat_tools
 from wxbot_framework.decision import Decider
-from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, SING_CRITERIA, SING_QUESTION, SING_THRESHOLD,
+from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, SING_CRITERIA, SING_QUESTION,
                                       VOICE_CONTEXT_LINES, VOICE_CRITERIA, VOICE_QUESTION, Dialogue,
-                                      checked_reply, singable, transcript_line, voice_state, working_messages)
+                                      checked_reply, sing_state, singable, transcript_line, voice_state,
+                                      working_messages)
 from wxbot_framework.image_receiver import image_download_pending
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import BEIJING, SnapshotExpired
@@ -162,8 +163,9 @@ class Plugin:
             memory=self.members.facts_for(room, message.sender_id), tools=tools,
             system=self.members.global_prompt, limit=self.members.reply_limit)
         reply = personality_text(reply, personality.name)
+        ctx.logger.info("对话正文 | 群=%s | %s", room, reply)
         model_seconds = time.perf_counter() - started
-        if self._sung(message, ctx, reply, snapshot.messages, delivery_guard):
+        if self._sung(message, ctx, reply, delivery_guard):
             self._note_sent(message, ctx, snapshot, reply)
             return model_seconds, time.perf_counter() - started - model_seconds, "清唱"
         speak = self._voice(ctx, room, snapshot.current, reply, snapshot.messages)
@@ -200,7 +202,7 @@ class Plugin:
         state = self.members.voice_selection(room)
         return bool(state.enabled and state.mode == "auto" and state.voice_id)
 
-    def _sung(self, message, ctx, reply, rows, delivery_guard):
+    def _sung(self, message, ctx, reply, delivery_guard):
         """正文被判成歌词且开了 Breeze 语音时清唱。唱出去返回 True，调用方就不再念或打字。"""
         speech = getattr(ctx, "_speech", None)
         if speech is None or not getattr(speech, "enabled", False) or not speech.uses_breeze():
@@ -211,12 +213,12 @@ class Plugin:
             return False
         if voice is None or not selected.enabled:
             return False
-        state = voice_state("", reply, rows, self.members.account)
         if not Decider(ctx.llm.decision, logger=ctx.logger).yes(
-                "sing", SING_QUESTION, SING_CRITERIA, state, threshold=SING_THRESHOLD):
+                "sing", SING_QUESTION, SING_CRITERIA, sing_state(reply),
+                threshold=self.members.room_sing_threshold(message.chat_id)):
             return False
         if not singable(reply):
-            ctx.logger.info("清唱 | 群=%s | 不像能唱的一句，改回普通回复", message.chat_id)
+            ctx.logger.info("清唱 | 群=%s | 正文不适合直接清唱，改回普通回复", message.chat_id)
             return False
         try:
             if speech.sing(ctx, message, reply, delivery_guard=delivery_guard):
@@ -310,13 +312,14 @@ class Plugin:
                                                               public_diary(self.members.recent_digests(room, PROMPT_DIARY_DAYS)),
                                                               self._people(room, chosen)), tools)
             reply = personality_text(checked_reply(pro.clean_reply(reply), self.members.reply_limit), personality.name)
+            ctx.logger.info("对话正文 | 群=%s | %s", room, reply)
         except (LLMError, PersonalityExpired) as error:
             ctx.logger.warning("未点名回应失败：%.2f秒 | %s", time.perf_counter() - started, error)
             return
         voice_rows = self.members.recent_room_lines(room, hours * 3600, VOICE_CONTEXT_LINES, clip=None)
         guard = lambda: ctx.personality_guard(personality)
         try:
-            if not self._sung(anchor, ctx, reply, voice_rows, guard):
+            if not self._sung(anchor, ctx, reply, guard):
                 speak = self._voice(ctx, room, last.get("text"), reply, voice_rows)
                 deliver_model_reply(ctx, anchor, reply, delivery_guard=guard, speak=speak)
         except SnapshotExpired:

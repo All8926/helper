@@ -187,6 +187,7 @@ def normalize_deep_thinking(value):
 
 DEFAULT_SPEAK_THRESHOLD = 0.5
 DEFAULT_VOICE_THRESHOLD = 0.6
+DEFAULT_SING_THRESHOLD = 0.85
 
 
 def normalize_speak_threshold(value):
@@ -207,6 +208,15 @@ def normalize_voice_threshold(value, setting=None):
         return DEFAULT_VOICE_THRESHOLD
     if type(value) is bool or type(value) not in (int, float) or value != value or not 0 <= value <= 1:
         raise BehaviorError("语音门槛应为 0–1 之间的数")
+    return round(float(value), 2)
+
+
+def normalize_sing_threshold(value):
+    """清唱时，决策概率达到这个数才把正文当成歌词。没填时 0.85。"""
+    if value is None:
+        return DEFAULT_SING_THRESHOLD
+    if type(value) is bool or type(value) not in (int, float) or value != value or not 0 <= value <= 1:
+        raise BehaviorError("清唱门槛应为 0–1 之间的数")
     return round(float(value), 2)
 
 
@@ -298,6 +308,7 @@ def normalize_room_setting(value, names):
             "hourly_limit": normalize_hourly_limit(value.get("hourly_limit")),
             "speak_threshold": normalize_speak_threshold(value.get("speak_threshold")),
             "voice_threshold": normalize_voice_threshold(value.get("voice_threshold"), value),
+            "sing_threshold": normalize_sing_threshold(value.get("sing_threshold")),
             "deep_thinking": normalize_deep_thinking(value.get("deep_thinking")),
             "plugin_options": normalize_plugin_options(value.get("plugin_options"))}
 

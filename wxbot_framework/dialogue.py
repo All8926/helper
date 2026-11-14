@@ -19,19 +19,22 @@ VOICE_CONTEXT_LINES = 8
 VOICE_REPLY_LIMIT = 300
 SING_QUESTION = "这条回复正文是不是歌词？"
 SING_CRITERIA = (
-    "整段回复就是一句可以清唱的歌词，不是解释、问答或普通聊天",
+    "整段回复就是歌词，不是解释、问答或普通聊天",
     "这是白话回复、解释、问答或普通聊天，不是歌词",
 )
-SING_THRESHOLD = 0.85
-SING_LIMIT = 40
 _LYRIC_BLOCK = re.compile(r"https?://|www\.\S+|```")
 
 
+def sing_state(reply):
+    """清唱决策只看这条回复，不附聊天，也不按字数截断。"""
+    return {"reply": str(reply or "")}
+
+
 def singable(text):
-    """歌词才能送去清唱。链接、代码、长串数字、列表或超过 40 字都不唱。"""
+    """链接、代码、长串数字或列表不送去清唱。字数不在这里卡。"""
     raw = str(text or "")
     collapsed = " ".join(raw.split())
-    if not collapsed or len(collapsed) > SING_LIMIT or _LYRIC_BLOCK.search(raw):
+    if not collapsed or _LYRIC_BLOCK.search(raw):
         return False
     if any(line.lstrip().startswith(("- ", "* ", "1.", "1、")) for line in raw.splitlines()):
         return False
