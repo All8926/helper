@@ -375,14 +375,21 @@ class BreezeTTS:
             raise TTSError('该音色不可用或已下架')
         return voice
 
-    def synthesize(self, text, voice_id):
+    def synthesize(self, text, voice_id, *, instructions="", guidance_scale=None):
         if not isinstance(text, str) or not text.strip() or len(text) > self.max_chars_per_clip or '\0' in text:
             raise TTSError("合成文本为空或超过单条长度限制")
         if not self.accepts(voice_id):
             raise TTSError("合成音色 ID 无效")
+        payload = {"text": text, "model_id": self.model}
+        if instructions:
+            if not isinstance(instructions, str) or "\0" in instructions:
+                raise TTSError("清唱说明无效")
+            payload["instructions"] = instructions
+            if guidance_scale is not None:
+                payload["voice_settings"] = {"guidance_scale": guidance_scale}
         path = '/v1/text-to-speech/' + urllib.parse.quote(voice_id) + '?' + urllib.parse.urlencode(
             {'output_format': 'wav_24000', 'delivery': 'sync'})
-        data = self._request(path, payload={'text': text, 'model_id': self.model}, limit=MAX_AUDIO_BYTES)
+        data = self._request(path, payload=payload, limit=MAX_AUDIO_BYTES)
         return normalize_wav(data)
 
 

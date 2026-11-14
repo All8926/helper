@@ -34,10 +34,10 @@ class PersonalityExpired(SnapshotExpired):
 
 def system_with_personality(system, state, prompts=None, guard=None, *, plain=False):
     """plain 为真时用于直接输出纯文本的群聊对话，不提 JSON 字段。"""
-    from .room_behavior import DEFAULT_GLOBAL_PROMPT
     library = PROMPTS if prompts is None else prompts
     prompt = library.get(state.name)
-    boundary = DEFAULT_GLOBAL_PROMPT if guard is None else guard
+    # 空值不补内置边界。对话把全局提示词放进功能要求，不再从这里追加。
+    boundary = guard.strip() if isinstance(guard, str) else ""
     if prompt is None:
         body = system
     elif plain:

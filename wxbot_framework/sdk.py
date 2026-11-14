@@ -692,10 +692,10 @@ class PluginContext:
         from .personality import PersonalityLLM
         state = personality if personality is not None else self.personality(message)
         prompts = self._members.prompts() if self._members is not None else None
-        guard = self._members.global_prompt if self._members is not None else None
+        # 全局提示词只作为对话的功能要求，总结和成语不再附带。
         thinking = self._members.room_deep_thinking(message.chat_id) if self._members is not None else True
         return PersonalityLLM(self.llm, state, current=lambda: self._members is None or
-                              self._members.personality_is_current(state), prompts=prompts, guard=guard,
+                              self._members.personality_is_current(state), prompts=prompts, guard=None,
                               thinking=thinking)
 
     def personality_guard(self, state):

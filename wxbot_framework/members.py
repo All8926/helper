@@ -247,6 +247,11 @@ class MemberStore:
                 db.execute("ALTER TABLE people ADD COLUMN self_named INTEGER NOT NULL DEFAULT 0")
             if "bot_generated" not in {row["name"] for row in db.execute("PRAGMA table_info(messages)")}:
                 db.execute("ALTER TABLE messages ADD COLUMN bot_generated INTEGER NOT NULL DEFAULT 0")
+            message_columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
+            if "kind" not in message_columns:
+                db.execute("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'")
+            if "media_ref" not in message_columns:
+                db.execute("ALTER TABLE messages ADD COLUMN media_ref TEXT NOT NULL DEFAULT ''")
             if "mode" not in {row["name"] for row in db.execute("PRAGMA table_info(room_voices)")}:
                 db.execute("ALTER TABLE room_voices ADD COLUMN mode TEXT NOT NULL DEFAULT 'always'")
             with db:
@@ -842,11 +847,15 @@ class MemberStore:
             for row in cursor:
                 if len(previous) >= budget:
                     break
-                text = row["text"].strip()
-                if text and "WXBOT_AT_CHAT_PROBE" not in text and text.split(maxsplit=1)[0] not in CONTROL:
-                    item = dict(row)
-                    item["speaker"] = self._context_speaker(message.chat_id, row["sender_id"], row["bot_generated"])
-                    previous.append(item)
+                kind = row["kind"] if "kind" in row.keys() else "text"
+                text = (row["text"] or "").strip()
+                if kind != "image" and (not text or "WXBOT_AT_CHAT_PROBE" in text or text.split(maxsplit=1)[0] in CONTROL):
+                    continue
+                item = dict(row)
+                item["kind"] = kind
+                item["media_ref"] = self._visible_image_ref(row) if kind == "image" else ""
+                item["speaker"] = self._context_speaker(message.chat_id, row["sender_id"], row["bot_generated"])
+                previous.append(item)
             member = self.find_by_wxid(message.sender_id, message.chat_id)
             state = db.execute("SELECT generation FROM chat_buffers WHERE account=? AND room=?",
                                (self.account, message.chat_id)).fetchone()
@@ -955,22 +964,25 @@ class MemberStore:
         cutoff = (self._now() - timedelta(seconds=max(1, int(seconds)))).astimezone(timezone.utc).isoformat()
         with self._lock:
             rows = self._connection().execute(
-                """SELECT id, sender_id, text, received_at, bot_generated, session_id, sequence
+                """SELECT id, sender_id, text, received_at, bot_generated, session_id, sequence, kind, media_ref
                    FROM messages WHERE account=? AND room=? AND received_at>=?
                    ORDER BY id DESC LIMIT ?""",
                 (self.account, room, cutoff, max(1, int(limit)) * 3),
             ).fetchall()
             chosen = []
             for row in reversed(rows):
+                kind = row["kind"] or "text"
                 text = " ".join((row["text"] or "").split())
-                if not text or "WXBOT_AT_CHAT_PROBE" in text or own_group_command(text):
+                if kind != "image" and (not text or "WXBOT_AT_CHAT_PROBE" in text or own_group_command(text)):
                     continue
-                if text.split(maxsplit=1)[0] in CONTROL:
+                if kind != "image" and text.split(maxsplit=1)[0] in CONTROL:
                     continue
                 chosen.append({
                     "id": row["id"],
                     "sender_id": row["sender_id"],
                     "text": text if clip is None else text[:clip],
+                    "kind": kind,
+                    "media_ref": self._visible_image_ref(row) if kind == "image" else "",
                     "bot": bool(row["bot_generated"]),
                     "session_id": row["session_id"] or "",
                     "sequence": row["sequence"],
@@ -1094,10 +1106,17 @@ class MemberStore:
                               data={"bot_generated": True})
         return self.record(reply)
 
+    def _visible_image_ref(self, row):
+        """编号只在文件还在时交给模型。路径不进上下文。"""
+        from .vision import catalog
+        token = row["media_ref"] if "media_ref" in row.keys() else ""
+        return token if token and catalog.path(token) else ""
+
     def record(self, message):
-        # 引用回复的新正文也是群聊文字，一并记下，上下文才连得上。
+        # 引用回复的新正文也是群聊文字，一并记下，上下文才连得上。图片只记类型和编号。
         quote = message.type == 49 and message.data.get("app_type") == 57 and bool(str(message.text).strip())
-        if not self.history_enabled or (message.type != 1 and not quote) or not message.is_group or message.chat_id not in self.groups:
+        image = message.type == 3
+        if not self.history_enabled or (message.type != 1 and not quote and not image) or not message.is_group or message.chat_id not in self.groups:
             return False
         if message.data.get("self_wxid", self.account) != self.account:
             return False
@@ -1111,11 +1130,19 @@ class MemberStore:
             self.rollover()
             db.execute("INSERT OR IGNORE INTO room_members VALUES(?,?,?)",
                        (self.account, message.chat_id, message.sender_id))
+            kind, ref, text = "text", "", message.text
+            if image:
+                kind, text = "image", ""
+                if message.data.get("image_status") == "ready" and message.image_path:
+                    from .vision import catalog
+                    ref = catalog.remember(message.chat_id, message.sender_id,
+                                           message.data.get("native_message_id"), message.image_path)
             result = db.execute("""INSERT OR IGNORE INTO messages
-                (account,room,sender_id,text,received_at,session_id,sequence,is_self,bot_generated) VALUES(?,?,?,?,?,?,?,?,?)""",
-                (self.account, message.chat_id, message.sender_id, message.text,
+                (account,room,sender_id,text,received_at,session_id,sequence,is_self,bot_generated,kind,media_ref)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (self.account, message.chat_id, message.sender_id, text,
                  self._now().astimezone(timezone.utc).isoformat(), message.session_id, message.sequence,
-                 int(message.is_self), int(bool(message.data.get("bot_generated")))))
+                 int(message.is_self), int(bool(message.data.get("bot_generated"))), kind, ref))
             return result.rowcount > 0
 
     def history(self, name, room=None, *, limit=100, since=None):

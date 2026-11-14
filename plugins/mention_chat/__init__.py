@@ -3,13 +3,16 @@
 先问决策模型现在该不该说，该说再由对话模型写一句，直接发到群里。"""
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 
 from wxbot_framework import proactive as pro
 from wxbot_framework.chat_tools import chat_tools
 from wxbot_framework.decision import Decider
-from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, VOICE_CONTEXT_LINES, VOICE_CRITERIA, VOICE_QUESTION, Dialogue,
-                                      checked_reply, transcript_line, voice_state, working_messages)
+from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, SING_CRITERIA, SING_QUESTION, SING_THRESHOLD,
+                                      VOICE_CONTEXT_LINES, VOICE_CRITERIA, VOICE_QUESTION, Dialogue,
+                                      checked_reply, singable, transcript_line, voice_state, working_messages)
+from wxbot_framework.image_receiver import image_download_pending
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import BEIJING, SnapshotExpired
 from wxbot_framework.memory import MemoryWorker, public_diary, public_memory
@@ -20,9 +23,10 @@ from wxbot_framework.quoted import reference
 from wxbot_framework.room_behavior import is_slash_command
 from wxbot_framework.sdk import Message
 from wxbot_framework.speech import deliver_model_reply
+from wxbot_framework.tts import TTSError
 from wxbot_framework.summary import CONTROL
 from wxbot_framework.text import own_group_command
-from wxbot_framework.vision import SeenImages
+from wxbot_framework.vision import catalog
 
 WATCH_SECONDS = 2
 _TRIGGER = {"hot": "对话还热", "beat": "看群"}
@@ -31,7 +35,8 @@ _TRIGGER = {"hot": "对话还热", "beat": "看群"}
 class Plugin:
     def on_load(self, ctx):
         self.members = ctx.members
-        self.images = SeenImages()
+        self.images = catalog
+        self._closed = False
         if not self.members.history_enabled:
             raise ValueError("艾特上下文对话需要 history_enabled: true")
         ctx.llm  # 启动时核对配置，不请求接口。
@@ -43,6 +48,7 @@ class Plugin:
         self._watch.start()
 
     def on_unload(self, ctx):
+        self._closed = True
         worker = getattr(self, "memory", None)
         if worker is not None:
             worker.stop()
@@ -59,6 +65,13 @@ class Plugin:
         room = message.chat_id
         if self._addressed(message):
             self.listener.addressed(room)
+            quoted = reference(message)
+            native = message.data.get("quoted_message_id") if quoted is not None and quoted.kind == "image" else ""
+            if native and not self.images.by_id(native) and image_download_pending(native):
+                # 等下载完成的线程不能占住插件队列，否则 ready 进不来。
+                threading.Thread(target=self._answer_later, args=(message, ctx, native),
+                                 name="QuotedImageReply", daemon=True).start()
+                return
             self._answer(message, ctx)
             return
         if (message.type == 1 and message.sender_id != self.members.account and self._can_hear(message)
@@ -118,21 +131,42 @@ class Plugin:
             except SnapshotExpired:
                 pass
 
+    def _with_quoted_image(self, message, snapshot):
+        """引用图若比这条消息更晚才写入流水，仍补进这次上下文。"""
+        quoted = reference(message)
+        native = message.data.get("quoted_message_id") if quoted is not None and quoted.kind == "image" else ""
+        token = self.images.token_for(native) if native else ""
+        if not token or any(row.get("media_ref") == token for row in snapshot.messages):
+            return snapshot
+        extra = {"kind": "image", "media_ref": token, "text": "", "speaker": quoted.author or "群友",
+                 "received_at": datetime.now(BEIJING).isoformat(), "bot_generated": 0}
+        return replace(snapshot, messages=snapshot.messages + (extra,))
+
+    def _answer_later(self, message, ctx, native):
+        """引用图还在下载时，文件一到就回复，最多等 5 秒。"""
+        self.images.wait_ready(native, 5)
+        if self._closed:
+            return
+        self._answer(message, ctx)
+
     def reply_to_member(self, message, ctx, snapshot, personality, delivery_guard):
         """上下文已准备好，在这里生成并发送给群友的回复。返回模型和发送各自的秒数。"""
         started = time.perf_counter()
         room = message.chat_id
-        image = self._image_path(message, ctx)
         speakers = self._speakers(snapshot.messages)
         speakers[snapshot.speaker_name] = message.sender_id
-        tools = chat_tools(ctx.llm, self.members, room, image=image, speakers=speakers)
+        tools = chat_tools(ctx.llm, self.members, room, speakers=speakers)
+        snapshot = self._with_quoted_image(message, snapshot)
         reply = Dialogue(ctx.llm_for(message, personality=personality)).reply(
             snapshot, diary=self.members.recent_digests(room, PROMPT_DIARY_DAYS),
-            memory=self.members.facts_for(room, message.sender_id), tools=tools, image=bool(image),
-            limit=self.members.reply_limit)
+            memory=self.members.facts_for(room, message.sender_id), tools=tools,
+            system=self.members.global_prompt, limit=self.members.reply_limit)
         reply = personality_text(reply, personality.name)
-        speak = self._voice(ctx, room, snapshot.current, reply, snapshot.messages)
         model_seconds = time.perf_counter() - started
+        if self._sung(message, ctx, reply, snapshot.messages, delivery_guard):
+            self._note_sent(message, ctx, snapshot, reply)
+            return model_seconds, time.perf_counter() - started - model_seconds, "清唱"
+        speak = self._voice(ctx, room, snapshot.current, reply, snapshot.messages)
         send_seconds, send_detail = self._deliver(message, ctx, snapshot, reply, delivery_guard, speak)
         return model_seconds, send_seconds, send_detail
 
@@ -143,16 +177,6 @@ class Plugin:
             return
         self.images.remember(message.chat_id, message.sender_id,
                              message.data.get("native_message_id"), message.image_path)
-
-    def _image_path(self, message, ctx):
-        """点名时可以看的那张图：引用到的图；没有引用图时，用这个人三分钟内刚发的一张。"""
-        quoted = reference(message)
-        if quoted is not None and quoted.kind == "image":
-            path = self.images.by_id(message.data.get("quoted_message_id"))
-            if not path:
-                ctx.logger.info("看图 | 群=%s | 引用的图片还没有本地文件", message.chat_id)
-            return path or None
-        return self.images.latest(message.chat_id, message.sender_id) or None
 
     def _speakers(self, rows):
         """称呼到微信 ID 的对照，给查档案工具用。"""
@@ -176,15 +200,34 @@ class Plugin:
         state = self.members.voice_selection(room)
         return bool(state.enabled and state.mode == "auto" and state.voice_id)
 
-    def _deliver(self, message, ctx, snapshot, reply, delivery_guard, speak=None):
-        display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
-        started = time.perf_counter()
-        with counting_send() as clock:
-            deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard, speak=speak)
-        send_seconds = time.perf_counter() - started
-        send_detail = describe_send(clock, send_seconds)
+    def _sung(self, message, ctx, reply, rows, delivery_guard):
+        """正文被判成歌词且开了 Breeze 语音时清唱。唱出去返回 True，调用方就不再念或打字。"""
+        speech = getattr(ctx, "_speech", None)
+        if speech is None or not getattr(speech, "enabled", False) or not speech.uses_breeze():
+            return False
+        try:
+            selected, voice = speech.selected(message.chat_id)
+        except Exception:
+            return False
+        if voice is None or not selected.enabled:
+            return False
+        state = voice_state("", reply, rows, self.members.account)
+        if not Decider(ctx.llm.decision, logger=ctx.logger).yes(
+                "sing", SING_QUESTION, SING_CRITERIA, state, threshold=SING_THRESHOLD):
+            return False
+        if not singable(reply):
+            ctx.logger.info("清唱 | 群=%s | 不像能唱的一句，改回普通回复", message.chat_id)
+            return False
+        try:
+            if speech.sing(ctx, message, reply, delivery_guard=delivery_guard):
+                ctx.logger.info("清唱 | 群=%s | 已发送", message.chat_id)
+                return True
+        except (TTSError, RuntimeError, SnapshotExpired) as error:
+            ctx.logger.warning("清唱没有发出，改回普通回复：%s", error)
+        return False
+
+    def _note_sent(self, message, ctx, snapshot, reply):
         self.listener.bot_spoke(message.chat_id)
-        # 发出去之后才记。写库失败不影响已经发出的回复。
         try:
             self.members.record_bot_reply(message, reply)
         except Exception:
@@ -193,6 +236,15 @@ class Plugin:
             self._remember(message, snapshot, reply)
         except Exception:
             ctx.logger.warning("回复已发出，个人档案没有排队")
+
+    def _deliver(self, message, ctx, snapshot, reply, delivery_guard, speak=None):
+        display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
+        started = time.perf_counter()
+        with counting_send() as clock:
+            deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard, speak=speak)
+        send_seconds = time.perf_counter() - started
+        send_detail = describe_send(clock, send_seconds)
+        self._note_sent(message, ctx, snapshot, reply)
         return send_seconds, send_detail
 
     def _remember(self, message, snapshot, reply):
@@ -254,18 +306,19 @@ class Plugin:
             personality = ctx.personality(anchor)
             tools = chat_tools(ctx.llm, self.members, room, speakers=self._speakers(chosen))
             reply = ctx.llm_for(anchor, personality=personality).chat(
-                pro.SYSTEM, pro.unnamed_input(datetime.now(BEIJING).date().isoformat(), transcript,
-                                              public_diary(self.members.recent_digests(room, PROMPT_DIARY_DAYS)),
-                                              self._people(room, chosen)), tools)
+                self.members.global_prompt, pro.unnamed_input(datetime.now(BEIJING).date().isoformat(), transcript,
+                                                              public_diary(self.members.recent_digests(room, PROMPT_DIARY_DAYS)),
+                                                              self._people(room, chosen)), tools)
             reply = personality_text(checked_reply(pro.clean_reply(reply), self.members.reply_limit), personality.name)
         except (LLMError, PersonalityExpired) as error:
             ctx.logger.warning("未点名回应失败：%.2f秒 | %s", time.perf_counter() - started, error)
             return
         voice_rows = self.members.recent_room_lines(room, hours * 3600, VOICE_CONTEXT_LINES, clip=None)
-        speak = self._voice(ctx, room, last.get("text"), reply, voice_rows)
         guard = lambda: ctx.personality_guard(personality)
         try:
-            deliver_model_reply(ctx, anchor, reply, delivery_guard=guard, speak=speak)
+            if not self._sung(anchor, ctx, reply, voice_rows, guard):
+                speak = self._voice(ctx, room, last.get("text"), reply, voice_rows)
+                deliver_model_reply(ctx, anchor, reply, delivery_guard=guard, speak=speak)
         except SnapshotExpired:
             ctx.logger.info("未点名回应已取消：人格已切换")
             return

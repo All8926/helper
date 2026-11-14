@@ -14,8 +14,8 @@ DEFAULT_BASE_URL = "https://emrank.tech/v1/decisions"
 # 早期默认只写到 /v1，路径由代码补上。现在地址原样使用，读到这一条旧值时改成完整地址。
 _LEGACY_BASE_URL = "https://emrank.tech/v1"
 DEFAULT_MODEL = "typesafe/jev[slow]"
-DECISIONS = ("speak", "voice")
-DEFAULT_FALLBACK = {"speak": 0.3, "voice": 0.3}
+DECISIONS = ("speak", "voice", "sing")
+DEFAULT_FALLBACK = {"speak": 0.3, "voice": 0.3, "sing": 0.0}
 STATE_LIMIT = 12000
 
 

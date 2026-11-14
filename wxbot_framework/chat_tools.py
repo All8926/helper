@@ -119,17 +119,25 @@ def web_search_tool(llm):
                  "required": ["query"]}, run)
 
 
-def view_image_tool(llm, path):
+def view_image_tool(llm):
+    from .vision import catalog
+
     def run(args):
+        token = args.get("id")
+        path = catalog.path(token) if isinstance(token, str) else ""
+        if not path:
+            return "没有这张图片"
         question = plain(args.get("question"), 200) or "描述这张图片"
         url = vision_data_url(path)
         if not url:
             return "图片读取失败"
         return llm.vision_client().chat(VISION_SYSTEM, question, image=url, thinking=False)
 
-    return Tool("view_image", "查看当前消息附带的那张图片，返回图片内容的文字描述。对方让你看图或问图里的内容时调用。",
-                {"type": "object", "properties": {"question": {"type": "string", "description": "想从图里了解什么"}},
-                 "required": ["question"]}, run)
+    return Tool("view_image", "查看上下文里某张已下载的图片，返回文字描述。id 是消息里的编号，不是文件路径。",
+                {"type": "object", "properties": {
+                    "id": {"type": "string", "description": "图片消息上的编号"},
+                    "question": {"type": "string", "description": "想从图里了解什么"}},
+                 "required": ["id"]}, run)
 
 
 def lookup_memory_tool(members, room, speakers):
@@ -180,12 +188,11 @@ def search_history_tool(members, room):
 
 
 def chat_tools(llm, members, room, *, image=None, speakers=None):
-    """组装这次回复可用的工具。image 是候选图片的本地路径，speakers 是称呼到微信 ID 的对照。"""
+    """组装这次回复可用的工具。speakers 是称呼到微信 ID 的对照。看图只认上下文里的编号。"""
     tools = []
     if llm.web_search["enabled"]:
         tools.append(web_search_tool(llm))
-    if image:
-        tools.append(view_image_tool(llm, image))
+    tools.append(view_image_tool(llm))
     tools += [lookup_memory_tool(members, room, speakers or {}), lookup_diary_tool(members, room),
               search_history_tool(members, room)]
     return tools

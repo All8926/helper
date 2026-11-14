@@ -1,6 +1,7 @@
 """未点名回应：对话还热时等安静再判断，平时按看群间隔看一眼；该不该说由决策模型定，说什么由对话模型写。"""
 import io
 import json
+import threading
 import time
 import unittest
 from datetime import timedelta
@@ -14,14 +15,22 @@ from plugins.mention_chat import Plugin
 from wxbot_framework import proactive as pro
 from wxbot_framework.chat_tools import chat_tools
 from wxbot_framework.llm import LLMError
-from wxbot_framework.room_behavior import BehaviorError, normalize_reply_limit, normalize_room_setting
+from wxbot_framework.room_behavior import BehaviorError, normalize_global_prompt, normalize_reply_limit, normalize_room_setting
 from wxbot_framework.sdk import Message
-from wxbot_framework.vision import vision_data_url
+from wxbot_framework.vision import catalog, vision_data_url
 
 ROOM, CAT, ROBOT, OTHER = daily.ROOM, daily.CAT, daily.ROBOT, daily.OTHER
 
 
 class FilterTests(unittest.TestCase):
+    def test_global_prompt_is_empty_without_a_length_cap(self):
+        self.assertEqual(normalize_global_prompt(None), "")
+        self.assertEqual(normalize_global_prompt("  "), "")
+        long = "词" * 5000
+        self.assertEqual(normalize_global_prompt(long), long)
+        with self.assertRaises(BehaviorError):
+            normalize_global_prompt("坏\0词")
+
     def test_settings_default_and_validate(self):
         default = normalize_room_setting({}, [])
         self.assertFalse(default["unnamed_reply"])
@@ -108,12 +117,14 @@ class PluginTests(unittest.TestCase):
         self.backend.capabilities = ("text.quote.send",)
         self.backend.send_quote_text = lambda room, original_id, text: self.backend.sent.append((room, text, original_id)) or True
         self.backend.send_at_text = lambda room, text, ids: self.backend.sent.append((room, text, ids)) or True
+        catalog.clear()
         self.unnamed = "要不吃烧烤"
         self.named, self.spoken = [], []
 
         def chat(system, user, tools=(), **_kwargs):
-            if "没人点你的名" in system:
-                self.spoken.append((system, json.loads(user), [tool.name for tool in tools]))
+            body = json.loads(user)
+            if "people" in body:
+                self.spoken.append((system, body, [tool.name for tool in tools]))
                 return self.unnamed
             self.named.append((system, user))
             return "这是回答。"
@@ -134,6 +145,37 @@ class PluginTests(unittest.TestCase):
     def later(self, seconds=pro.QUIET_SECONDS + 1):
         return time.monotonic() + seconds
 
+    def test_custom_global_prompt_is_the_chat_task(self):
+        self.start(unnamed=False)
+        self.store.global_prompt = "请用短句"
+        self.at("在吗", 1)
+        self.assertIn("请用短句", self.named[-1][0])
+        self.assertNotIn("禁止聊政治", self.named[-1][0])
+
+    def test_lyric_reply_is_sung_without_the_tag(self):
+        self.start(unnamed=False, decision={"fallback": {"sing": 1}})
+
+        class Speech:
+            enabled = True
+            sung = []
+
+            def uses_breeze(self):
+                return True
+
+            def selected(self, room):
+                from types import SimpleNamespace
+                return SimpleNamespace(enabled=True), SimpleNamespace(id="voc_xeh3w54cqvnp")
+
+            def sing(self, ctx, message, text, delivery_guard=None):
+                self.sung.append(text)
+                return True
+
+        speech = Speech()
+        self.ctx._speech = speech
+        self.at("唱一句", 1)
+        self.assertEqual(speech.sung, ["这是回答。"])
+        self.assertFalse(any("[唱歌]" in str(item) for item in self.backend.sent))
+
     def test_unnamed_reply_off_only_answers_mentions(self):
         self.start(unnamed=False)
         self.at("今晚吃什么", 1)
@@ -153,13 +195,14 @@ class PluginTests(unittest.TestCase):
         self.plugin._watch_once(now=self.later())
         self.assertEqual(self.backend.sent[-1], (ROOM, "要不吃烧烤"))
         system, body, tools = self.spoken[0]
-        self.assertIn("禁止聊政治", system)
+        self.assertNotIn("禁止聊政治", system)
         self.assertEqual([row["text"][-5:] for row in body["transcript"]], ["今晚吃什么", "这是回答。", "那明天吃啥"])
         self.assertEqual([row["bot"] for row in body["transcript"]], [False, True, False])
         self.assertEqual(body["people"][0]["memory"], ["喜欢火锅"])
         self.assertIn("search_history", tools)
-        self.assertNotIn("view_image", tools)
+        self.assertIn("view_image", tools)
         self.assertNotIn("web_search", tools)
+        self.assertFalse(any(row.get("type") == "image" and row.get("id") for row in body["transcript"]))
         self.assertEqual(self.store.recent_room_lines(ROOM, 60, 5)[-1]["text"], "要不吃烧烤")
         self.plugin._watch_once(now=self.later(10))
         self.assertEqual(len(self.spoken), 1)
@@ -329,51 +372,59 @@ class PluginTests(unittest.TestCase):
         Image.new("RGB", (4, 4), color).save(path)
         return path
 
-    def _picture(self, path, sender=CAT, identifier="88", status="ready"):
-        self.plugin.on_message(Message("", ROOM, sender_id=sender, is_group=True, session_id="test",
-            sequence=1, type=3, data={"image_status": status, "image_path": str(path),
-                                      "native_message_id": identifier}), self.ctx)
+    def _picture(self, path, sender=CAT, identifier="88", status="ready", sequence=1):
+        message = Message("", ROOM, sender_id=sender, is_group=True, session_id="test",
+            sequence=sequence, type=3, data={"image_status": status, "image_path": str(path),
+                                             "native_message_id": identifier})
+        self.store.record(message)
+        self.plugin.on_message(message, self.ctx)
+        return message
 
     def _look(self):
-        """模型拿到 view_image 时就看一眼，记下送去看图的图片和提示。"""
-        self.offered, self.looked = [], []
+        """记下上下文里的图片编号。模型自己决定看时，测试替它看最后一张。"""
+        self.offered, self.looked, self.systems, self.payloads = [], [], [], []
 
         def chat(system, user, tools=(), image=None, **_kwargs):
             if image is not None:
                 self.looked.append(image)
                 return "一张纯色图片"
             found = {tool.name: tool for tool in tools}
-            self.offered.append(("view_image" in found, "附带了一张图片" in system))
-            if "view_image" in found:
-                return found["view_image"].run({"question": "这是什么"})
+            body = json.loads(user)
+            self.payloads.append(body)
+            ids = [row["id"] for row in body.get("transcript", []) if row.get("type") == "image" and row.get("id")]
+            self.offered.append(ids)
+            self.systems.append(system)
+            self.tools = found
+            if "view_image" in found and ids:
+                return found["view_image"].run({"id": ids[-1], "question": "这是什么"})
             return "看到了。"
 
         self.ctx._llm.chat.side_effect = chat
 
-    def test_mention_offers_only_that_persons_recent_image(self):
+    def test_image_lines_carry_ids_and_paths_are_rejected(self):
         self.start(unnamed=False)
         self._look()
         red, blue = self._png("red.png", "red"), self._png("blue.png", "blue")
-        self._picture(blue, sender=OTHER, identifier="81")
+        self._picture(blue, sender=OTHER, identifier="81", sequence=1)
         self.at("看别人的图", 2)
-        self.assertEqual(self.offered[-1], (False, False))
-        self._picture(red, status="failed", identifier="82")
+        self.assertTrue(self.offered[-1])
+        self.assertNotIn("附带了一张图片", self.systems[-1])
+        self._picture(red, status="failed", identifier="82", sequence=3)
         self.at("失败的图", 4)
-        self.assertEqual(self.offered[-1], (False, False))
-        self._picture(red, identifier="83")
+        failed = [row for row in self.payloads[-1]["transcript"] if row.get("type") == "image" and "id" not in row]
+        self.assertTrue(failed)
+        self._picture(red, identifier="83", sequence=5)
         self.at("这是什么", 6)
-        self.assertEqual(self.offered[-1], (True, True))
-        self.assertEqual(self.looked, [vision_data_url(red)])
-        self.assertIn("一张纯色图片", self.backend.sent[-1][1])
-        self.say("那左边是什么意思", 7)
-        self.assertEqual(len(self.offered), 3)
+        self.assertIn(vision_data_url(red), self.looked)
+        self.assertEqual(self.tools["view_image"].run({"id": r"C:\secret.png"}), "没有这张图片")
+        self.assertEqual(self.tools["view_image"].run({"id": "404"}), "没有这张图片")
 
-    def test_quoted_image_wins_and_a_missing_quote_does_not_substitute(self):
+    def test_quoted_image_uses_its_id_and_a_missing_quote_adds_none(self):
         self.start(unnamed=False)
         self._look()
         red, blue = self._png("red.png", "red"), self._png("blue.png", "blue")
-        self._picture(red, identifier="83")
-        self._picture(blue, sender=OTHER, identifier="81")
+        self._picture(red, identifier="83", sequence=1)
+        self._picture(blue, sender=OTHER, identifier="81", sequence=2)
         quiet = Message("看看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=9, type=49,
                         data={"app_type": 57, "quoted_message_id": "81",
                               "quoted_message": {"author": "别人", "kind": "image", "text": "[图片]",
@@ -387,12 +438,36 @@ class PluginTests(unittest.TestCase):
                                                  "available": True, "truncated": False}})
         self.store.record(asked)
         self.plugin.on_message(asked, self.ctx)
-        self.assertEqual(self.offered[-1], (True, True))
-        self.assertEqual(self.looked, [vision_data_url(blue)])
+        self.assertIn(vision_data_url(blue), self.looked)
         missing = Message("再看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=11, type=49,
                           data={"app_type": 57, "is_at_self": True, "at_members": (ROBOT,), "quoted_message_id": "404",
                                 "quoted_message": {"author": "别人", "kind": "image", "text": "[图片]",
                                                    "available": True, "truncated": False}})
         self.store.record(missing)
         self.plugin.on_message(missing, self.ctx)
-        self.assertEqual(self.offered[-1], (False, False))
+        ids = [row.get("id") for row in self.payloads[-1]["transcript"] if row.get("type") == "image"]
+        self.assertNotIn("404", ids)
+
+    def test_quoted_image_waits_until_the_download_is_ready(self):
+        from wxbot_framework.image_receiver import _track_download
+        self.start(unnamed=False)
+        self._look()
+        red = self._png("late.png", "red")
+        _track_download("91", True)
+
+        def finish():
+            time.sleep(0.15)
+            self._picture(red, identifier="91", sequence=1)
+            _track_download("91", False)
+
+        threading.Thread(target=finish, daemon=True).start()
+        asked = Message("看看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=2, type=49,
+                        data={"app_type": 57, "is_at_self": True, "at_members": (ROBOT,), "quoted_message_id": "91",
+                              "quoted_message": {"author": "小猫", "kind": "image", "text": "[图片]",
+                                                 "available": True, "truncated": False}})
+        self.store.record(asked)
+        self.plugin.on_message(asked, self.ctx)
+        deadline = time.perf_counter() + 2
+        while time.perf_counter() < deadline and not self.looked:
+            time.sleep(0.05)
+        self.assertIn(vision_data_url(red), self.looked)

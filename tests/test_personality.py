@@ -96,7 +96,7 @@ class PersonalityTests(unittest.TestCase):
         self.ctx.llm_for(self.message("问题")).complete_json("原功能提示", "输入")
         sent_system = provider.call_args.args[0]
         self.assertTrue(sent_system.startswith("原功能提示"))
-        self.assertIn("禁止聊政治", sent_system)
+        self.assertNotIn("禁止聊政治", sent_system)
 
     def test_cancel_during_model_request_discards_old_personality_reply(self):
         state = self.store.set_personality(ROOM, "嘴臭")
@@ -186,7 +186,7 @@ class PersonalityTests(unittest.TestCase):
         self.ctx.llm_for(self.message("问题")).complete_json("原功能提示", "输入")
         sent_system = provider.call_args.args[0]
         self.assertTrue(sent_system.startswith("原功能提示"))
-        self.assertIn("禁止聊政治", sent_system)
+        self.assertNotIn("禁止聊政治", sent_system)
 
     def test_personality_prompt_applies_to_member_and_group_summaries(self):
         self.store.record(self.message("今天要认真工作"))

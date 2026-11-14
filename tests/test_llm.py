@@ -535,7 +535,7 @@ class DecisionTests(unittest.TestCase):
         call.assert_not_called()
 
     def test_settings_validate_and_hide_the_key(self):
-        self.assertEqual(normalize_decision(None)["fallback"], {"speak": 0.3, "voice": 0.3})
+        self.assertEqual(normalize_decision(None)["fallback"], {"speak": 0.3, "voice": 0.3, "sing": 0.0})
         for change in ({"api_key": ""}, {"base_url": "http://example.com"}, {"timeout_seconds": 0},
                        {"fallback": {"speak": 2}}, {"fallback": {"voice": True}}, {"enabled": "yes"}):
             with self.subTest(change=change), self.assertRaises(ValueError):

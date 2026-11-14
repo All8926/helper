@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
+import secrets
 import threading
 import time
 
@@ -90,27 +91,67 @@ class SeenImages:
         self.limit = limit
         self._lock = threading.Lock()
         self._by_id = {}
+        self._by_token = {}
         self._order = []
 
     def remember(self, room, sender, identifier, path):
+        """记下已下载的图，返回给模型的编号。无效输入返回空字符串。"""
         identifier = message_id(identifier)
         if not identifier or not all(isinstance(value, str) and value and "\0" not in value
                                       for value in (room, sender, path)):
-            return False
+            return ""
         with self._lock:
-            self._by_id[identifier] = (room, sender, path, time.monotonic())
+            current = self._by_id.get(identifier)
+            token = current[4] if current and len(current) > 4 else secrets.token_hex(4)
+            self._by_id[identifier] = (room, sender, path, time.monotonic(), token)
+            self._by_token[token] = identifier
             if identifier in self._order:
                 self._order.remove(identifier)
             self._order.append(identifier)
             while len(self._order) > self.limit:
-                self._by_id.pop(self._order.pop(0), None)
-        return True
+                dropped = self._order.pop(0)
+                old = self._by_id.pop(dropped, None)
+                if old and len(old) > 4:
+                    self._by_token.pop(old[4], None)
+        return token
 
     def by_id(self, identifier):
         identifier = message_id(identifier)
         with self._lock:
             row = self._by_id.get(identifier)
         return row[2] if row else ""
+
+    def token_for(self, identifier):
+        identifier = message_id(identifier)
+        with self._lock:
+            row = self._by_id.get(identifier)
+        return row[4] if row and len(row) > 4 else ""
+
+    def path(self, token):
+        """只接受程序分配的编号。路径和认不出的编号都打不开。"""
+        if not isinstance(token, str) or len(token) != 8 or any(ch not in "0123456789abcdef" for ch in token):
+            return ""
+        with self._lock:
+            identifier = self._by_token.get(token)
+            row = self._by_id.get(identifier) if identifier else None
+        return row[2] if row else ""
+
+    def wait_ready(self, identifier, timeout=5):
+        """文件一到就返回。没在下载就立刻返回。到上限还没有也返回。"""
+        from .image_receiver import image_download_pending
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.by_id(identifier):
+                return True
+            if not image_download_pending(identifier) or time.monotonic() >= deadline:
+                return bool(self.by_id(identifier))
+            time.sleep(0.05)
+
+    def clear(self):
+        with self._lock:
+            self._by_id.clear()
+            self._by_token.clear()
+            self._order.clear()
 
     def latest(self, room, sender, now=None):
         moment = time.monotonic() if now is None else now
@@ -120,3 +161,7 @@ class SeenImages:
         if not rows:
             return ""
         return max(rows, key=lambda row: row[3])[2]
+
+
+# 本进程已下载图片的编号和路径。提示词里只出现编号。
+catalog = SeenImages(window=180, limit=200)

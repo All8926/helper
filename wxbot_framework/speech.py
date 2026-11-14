@@ -12,7 +12,10 @@ import time
 from .members import SnapshotExpired
 from .pacing import note_synth
 from .summary import split_text
-from .tts import TTSError, open_tts
+from .tts import BreezeTTS, TTSError, open_tts
+
+SING_INSTRUCTIONS = "清唱这一句，旋律简单，一句唱完，不要念白"
+SING_TAG = "[唱歌]"
 
 # 链接、代码块不适合念出来。自动模式下选了语音时，最多连续这么条。
 _UNSPEAKABLE = re.compile(r"https?://|www\.\S+|```|`[^`]{6,}`")
@@ -247,6 +250,55 @@ class SpeechController:
                     # 微信是否已送达不确定，不在此处重复发文字或重试。
                     raise RuntimeError("原生语音发送未确认成功")
             note_synth(synth_seconds)
+        return True
+
+    def uses_breeze(self):
+        with self._lock:
+            return isinstance(self._client, BreezeTTS)
+
+    def sing(self, ctx, message, text, *, delivery_guard=None):
+        """把一句歌词清唱成一条语音。不是 Breeze 或发送失败时返回 False，调用方改回普通回复。"""
+        state, voice = self.selected(message.chat_id)
+        if voice is None or not state.enabled:
+            return False
+        with self._lock:
+            client, generation = self._client, self._generation
+        if not isinstance(client, BreezeTTS):
+            return False
+        lyric = " ".join(str(text or "").split())
+        if not lyric:
+            return False
+
+        @contextmanager
+        def guard():
+            if not ctx._service.session_is_current(message.session_id):
+                raise SnapshotExpired("微信连接已结束")
+            if not self.enabled:
+                raise SnapshotExpired("语音回复已停用")
+            with delivery_guard() if delivery_guard else nullcontext():
+                with self.members.voice_delivery_guard(state), self._lock:
+                    if self._closed or generation != self._generation:
+                        raise SnapshotExpired("语音回复配置已变更")
+                    yield
+
+        account = hashlib.sha256(self.members.account.encode("ascii")).hexdigest()[:16]
+        directory = self.directory / account
+        directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="tts-", dir=directory) as temporary:
+            owned = Path(temporary).resolve()
+            if not owned.is_relative_to(directory.resolve()):
+                raise TTSError("语音临时目录超出预期范围")
+            with guard():
+                pass
+            synth_started = time.perf_counter()
+            data = client.synthesize(SING_TAG + lyric, voice.id, instructions=SING_INSTRUCTIONS, guidance_scale=2)
+            note_synth(time.perf_counter() - synth_started)
+            path = owned / "0.wav"
+            path.write_bytes(data)
+            with guard():
+                pass
+            if not ctx.reply_voice(message, path, delivery_guard=guard):
+                raise RuntimeError("原生语音发送未确认成功")
         return True
 
 

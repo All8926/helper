@@ -15,6 +15,30 @@ from .image_metadata import (ImageMetadata, ImageMetadataError, ImageStore,
 from .images import MAX_IMAGE_BYTES
 
 
+_pending_lock = threading.Lock()
+_pending = set()
+
+
+def image_download_pending(identifier):
+    """这张图是否还在本次下载队列或下载线程里。"""
+    key = str(identifier or "")
+    if not key:
+        return False
+    with _pending_lock:
+        return key in _pending
+
+
+def _track_download(identifier, active):
+    key = str(identifier or "")
+    if not key:
+        return
+    with _pending_lock:
+        if active:
+            _pending.add(key)
+        else:
+            _pending.discard(key)
+
+
 _PUBLIC_FIELDS = (
     "md5", "width", "height", "length", "hdlength", "cdnthumbwidth", "cdnthumbheight",
     "cdnthumblength", "cdnmidwidth", "cdnmidheight", "encryver",
@@ -94,14 +118,19 @@ class ImageReceiver:
         snapshot["image_metadata"] = {name: getattr(metadata, name) for name in _PUBLIC_FIELDS}
         snapshot["image_quality"] = select_image_download(metadata)[3]
         full = False
+        key = str(snapshot.get("native_message_id") or "")
+        if key:
+            _track_download(key, True)
         with self._enqueue_lock:
             if self._stop.is_set():
+                _track_download(key, False)
                 return False
             try:
                 self._queue.put_nowait((snapshot, metadata))
             except queue.Full:
                 full = True
         if full:
+            _track_download(key, False)
             self._failed(snapshot, "图片接收队列已满")
             return False
         return True
@@ -164,7 +193,9 @@ class ImageReceiver:
             pass
 
     def _process(self, data, metadata):
+        key = str(data.get("native_message_id") or "")
         if not self._active():
+            _track_download(key, False)
             return
         try:
             body = self._download(metadata)
@@ -182,6 +213,8 @@ class ImageReceiver:
             reason = ("原图下载或保存失败，未自动切换普通图"
                       if data.get("image_quality") == "original" else "图片下载或保存失败")
             self._failed(data, reason)
+        finally:
+            _track_download(key, False)
 
     def _run(self):
         while not self._stop.is_set():
@@ -203,9 +236,10 @@ class ImageReceiver:
         with self._enqueue_lock:
             while True:
                 try:
-                    self._queue.get_nowait()
+                    data, _metadata = self._queue.get_nowait()
                 except queue.Empty:
                     break
+                _track_download(data.get("native_message_id"), False)
                 self._queue.task_done()
         if threading.current_thread() is not self._worker:
             self._worker.join(timeout=min(timeout, 60))
