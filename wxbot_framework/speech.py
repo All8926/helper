@@ -14,9 +14,6 @@ from .pacing import note_synth
 from .summary import split_text
 from .tts import BreezeTTS, TTSError, open_tts
 
-SING_INSTRUCTIONS = "清唱这一句，旋律简单，一句唱完，不要念白"
-SING_TAG = "[唱歌]"
-
 # 链接、代码块不适合念出来。自动模式下选了语音时，最多连续这么条。
 _UNSPEAKABLE = re.compile(r"https?://|www\.\S+|```|`[^`]{6,}`")
 MAX_AUTO_CLIPS = 3
@@ -256,18 +253,26 @@ class SpeechController:
         with self._lock:
             return isinstance(self._client, BreezeTTS)
 
+    def can_sing(self):
+        """当前这家语音会按唱歌指令清唱。Fish 不会。"""
+        with self._lock:
+            client = self._client
+        return getattr(client, "sings", False) is True
+
     def sing(self, ctx, message, text, *, delivery_guard=None):
-        """把一句歌词清唱成一条语音。不是 Breeze 或发送失败时返回 False，调用方改回普通回复。"""
+        """把一句歌词清唱成一条语音。当前语音不会唱，或发送失败时返回 False，调用方改回普通回复。"""
         state, voice = self.selected(message.chat_id)
         if voice is None or not state.enabled:
             return False
         with self._lock:
             client, generation = self._client, self._generation
-        if not isinstance(client, BreezeTTS):
+        if getattr(client, "sings", False) is not True:
             return False
         lyric = " ".join(str(text or "").split())
         if not lyric:
             return False
+        instructions = getattr(client, "sing_instructions", "") or "唱歌"
+        prefix = getattr(client, "sing_prefix", "") or ""
 
         @contextmanager
         def guard():
@@ -291,7 +296,9 @@ class SpeechController:
             with guard():
                 pass
             synth_started = time.perf_counter()
-            data = client.synthesize(SING_TAG + lyric, voice.id, instructions=SING_INSTRUCTIONS, guidance_scale=2)
+            # Breeze 仍在正文前加标签并加强指令；豆包只把同一句放进语音指令。
+            data = client.synthesize(prefix + lyric, voice.id, instructions=instructions,
+                                     guidance_scale=2 if prefix else None)
             note_synth(time.perf_counter() - synth_started)
             path = owned / "0.wav"
             path.write_bytes(data)

@@ -834,6 +834,7 @@ function showModelProfile(name) {
     form.elements.fallback_speak.value = fallback.speak ?? 0.3;
     form.elements.fallback_voice.value = fallback.voice ?? 0.3;
   }
+  if (name === 'tts') form.elements.sing_instructions.value = chosen.sing_instructions || '';
   form.querySelector('[data-profile-name]').value = chosen.name || '';
 }
 function readModelForm(form, name) {
@@ -896,12 +897,17 @@ $('#tts-form').elements.provider.onchange = event => {
   const form = event.target.form;
   const model = form.elements.model;
   const base = form.elements.base_url;
-  if (event.target.value === 'breeze') {
+  const provider = event.target.value;
+  const foreign = value => !value || value.includes('fish.audio') || value.includes('breeze.blue') || value.includes('openspeech.bytedance.com');
+  if (provider === 'breeze') {
     if (!model.value.startsWith('breeze-')) model.value = 'breeze-tts-2';
-    if (!base.value || base.value.includes('fish.audio')) base.value = 'https://api.breeze.blue';
-  } else if (model.value.startsWith('breeze-')) {
+    if (foreign(base.value)) base.value = 'https://api.breeze.blue';
+  } else if (provider === 'doubao') {
+    if (!model.value.startsWith('seed-tts-')) model.value = 'seed-tts-2.0';
+    if (foreign(base.value)) base.value = 'https://openspeech.bytedance.com';
+  } else if (model.value.startsWith('breeze-') || model.value.startsWith('seed-tts-')) {
     model.value = 's2.1-pro-free';
-    if (!base.value || base.value.includes('breeze.blue')) base.value = 'https://api.fish.audio';
+    if (foreign(base.value)) base.value = 'https://api.fish.audio';
   }
 };
 $('#delay-form').onsubmit=e=>{e.preventDefault();const f=e.target.elements;action(()=>save({text_send_delay:{enabled:f.enabled.checked,characters_per_group:Number(f.characters_per_group.value),min_seconds:Number(f.min_seconds.value),max_seconds:Number(f.max_seconds.value)}}));};

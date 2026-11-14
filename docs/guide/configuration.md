@@ -7,7 +7,7 @@
 | `bot_config.json` | 账号、会话范围、插件开关、发送节奏 |
 | `members_config.json` | 支持的群、群内称呼、消息记录 |
 | `llm_config.json` | 大模型地址、密钥、模型与超时 |
-| `tts_config.json` | Fish Audio 密钥、模型、默认音色与合成参数 |
+| `tts_config.json` | 语音厂商、密钥、模型、默认音色、唱歌指令与合成参数 |
 
 ## 机器人配置
 

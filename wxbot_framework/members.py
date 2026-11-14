@@ -660,11 +660,11 @@ class MemberStore:
             return VoiceSelection(room, row["voice_id"], row["name"], bool(row["enabled"]), row["generation"], mode)
 
     def set_voice(self, room, voice_id, name, *, enabled=True, mode=None):
-        from .tts import VOICE_ID
+        from .tts import VOICE_ID, VOICE_ID_HINT
         if room not in self.groups or type(enabled) is not bool:
             raise MemberError("请在已配置的群中切换音色")
         if enabled and (not isinstance(voice_id, str) or not VOICE_ID.fullmatch(voice_id)):
-            raise MemberError("音色 ID 无效")
+            raise MemberError(VOICE_ID_HINT)
         if not isinstance(name, str) or len(name) > 128 or any(ord(ch) < 32 for ch in name):
             raise MemberError("音色名称无效")
         if mode is not None and mode not in ("always", "auto"):
@@ -699,10 +699,10 @@ class MemberStore:
 
     def assign_room_voice(self, room, mode, voice_id=""):
         """按页面或指令设置本群音色和语音方式。voice_id 为空时沿用本群已经保存的 ID。"""
-        from .tts import VOICE_ID, normalize_voice_id
+        from .tts import VOICE_ID, VOICE_ID_HINT, normalize_voice_id
         supplied = normalize_voice_id(voice_id)
         if supplied and not VOICE_ID.fullmatch(supplied):
-            raise MemberError("音色 ID 无效。Fish 是 32 位十六进制，Breeze 以 voc_ 开头")
+            raise MemberError(VOICE_ID_HINT)
         current = self.voice_selection(room)
         if mode == "off":
             if supplied:
@@ -716,7 +716,7 @@ class MemberStore:
         if not chosen:
             raise MemberError("请填写本群音色 ID，或在「模型与语音」中填写默认音色 ID")
         if not VOICE_ID.fullmatch(chosen):
-            raise MemberError("音色 ID 无效。Fish 是 32 位十六进制，Breeze 以 voc_ 开头")
+            raise MemberError(VOICE_ID_HINT)
         name = current.name if current.voice_id == chosen and current.name else chosen
         return self.set_voice(room, chosen, name, enabled=True, mode=mode)
 

@@ -91,8 +91,10 @@ def on_message(self, message, ctx):
 
 `/音色 关闭` 或 `/音色 文字` 仅关闭当前群的语音回复；再次选择名称即恢复为始终语音。已经选过音色的群保持始终语音。`/音色 自动` 之后，回复写好后由[决策模型](../guide/configuration.md#决策模型)判断念出来还是打成文字。概率达到本群「语音门槛」才念，默认 0.6，在管理台修改；决策模型没启用或调用失败时按配置的语音概率随机决定。链接、代码、长串数字，以及需要超过 3 条语音的回复仍用文字。选了语音时按句拆开，最多连续 3 条。选择和方式按账号、群存入本地成员数据库，重启、每日清空、`/清空` 均保留。
 
-`tts_config.json` 的 `provider` 为 `fish` 或 `breeze`。没写时仍是 Fish Audio。Breeze Blue 使用 `https://api.breeze.blue`，模型为 `breeze-tts-2` 或 `breeze-tts-2-multilingual`，请求头是 `xi-api-key`，合成接口见[官方文档](https://docs.breezeblue.ai/api-reference/text-to-speech/convert-text-to-speech)。同一时间只用配置里的一家。配置文件路径由 `bot_config.json` 的 `tts_config_file` 指定，修改后重载 `voice_reply` 或重启。
+`tts_config.json` 的 `provider` 为 `fish`、`breeze` 或 `doubao`。没写时仍是 Fish Audio。同一时间只用配置里的一家。Breeze Blue 使用 `https://api.breeze.blue`，模型为 `breeze-tts-2` 或 `breeze-tts-2-multilingual`，请求头是 `xi-api-key`，合成接口见[官方文档](https://docs.breezeblue.ai/api-reference/text-to-speech/convert-text-to-speech)。豆包语音使用 `https://openspeech.bytedance.com`，模型为 `seed-tts-2.0`，请求头是 `X-Api-Key` 和 `X-Api-Resource-Id`，`default_voice` 填控制台里的 speaker ID。豆包没有公开音色翻页，`/查看音色` 只列出这个已配置音色，其他音色用 `/音色 speaker ID` 选择。配置文件路径由 `bot_config.json` 的 `tts_config_file` 指定，修改后重载 `voice_reply` 或重启。
+
+`sing_instructions` 是清唱时交给语音模型的一句说明。不填时用「唱歌」。Breeze 把它放进 `instructions`，并仍在歌词前加 `[唱歌]`；豆包把它放进语音指令 `context_texts`，歌词本身不加标签。最多 200 字、一行。这是账号级设置，不按群分开。
 
 合成使用 WAV、24 kHz、单声道 16-bit PCM，并修正流式 WAV 的占位长度，再转为微信 SILK。长回复按句子拆分，每段最多 `max_chars_per_clip` 字符（20–180），每条音频最多 60 秒。全部片段先合成成功，再只发送语音条；合成失败时回退文字，原生发送结果不确定时不自动重复发送。
 
-合成期间发生清空、跨天、人格/音色切换、插件停用或微信断开，会取消未发出的旧语音。临时 WAV 位于 `.runtime/tts/`，调用结束后清理；本地密钥、音色设置和缓存不要提交到仓库。模型回复正文会发送到你配置的 Fish Audio 服务。
+合成期间发生清空、跨天、人格/音色切换、插件停用或微信断开，会取消未发出的旧语音。临时 WAV 位于 `.runtime/tts/`，调用结束后清理；本地密钥、音色设置和缓存不要提交到仓库。模型回复正文会发送到 `tts_config.json` 里配置的语音服务。

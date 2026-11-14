@@ -163,7 +163,7 @@ class PluginTests(unittest.TestCase):
             enabled = True
             sung = []
 
-            def uses_breeze(self):
+            def can_sing(self):
                 return True
 
             def selected(self, room):
@@ -193,7 +193,7 @@ class PluginTests(unittest.TestCase):
             enabled = True
             sung = []
 
-            def uses_breeze(self):
+            def can_sing(self):
                 return True
 
             def selected(self, room):

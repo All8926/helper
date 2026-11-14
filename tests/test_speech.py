@@ -62,6 +62,22 @@ class SpeechTests(unittest.TestCase):
         self.client.synthesize.assert_not_called()
         self.assertEqual(self.backend.sent[-1][1], '文字回答')
 
+    def test_sing_keeps_breeze_tag_and_drops_it_for_doubao(self):
+        self.setup_speech()
+        self.speech.select(ROOM, FIRST.name)
+        self.client.sings = True
+        self.client.sing_prefix = "[唱歌]"
+        self.client.sing_instructions = "慢一点"
+        self.assertTrue(self.speech.can_sing())
+        self.assertTrue(self.speech.sing(self.ctx, self.message("唱"), "夜空"))
+        self.client.synthesize.assert_called_once_with(
+            "[唱歌]夜空", FIRST.id, instructions="慢一点", guidance_scale=2)
+        self.client.synthesize.reset_mock()
+        self.client.sing_prefix = ""
+        self.client.sing_instructions = "唱歌"
+        self.assertTrue(self.speech.sing(self.ctx, self.message("唱"), "夜空"))
+        self.client.synthesize.assert_called_once_with("夜空", FIRST.id, instructions="唱歌", guidance_scale=None)
+
     def test_success_sends_only_voice_and_removes_temporary_audio(self):
         self.setup_speech()
         deliver_model_reply(self.ctx, self.message('提问'), '这是模型生成的回答。', display_name='测试成员')

@@ -36,6 +36,6 @@
 
 ## 本地数据
 
-模型生成的回复正文会发送给配置的 Fish Audio 服务。密钥只从本地 `tts_config.json` 读取，账号和群音色设置存入本地成员数据库。临时 WAV、SILK 在调用结束后清理，配置、数据库和缓存均不应提交。
+模型生成的回复正文会发送给 `tts_config.json` 里配置的语音服务，可以是 Fish Audio、Breeze Blue 或豆包语音。唱歌指令写在同一份配置的 `sing_instructions`，不填时用「唱歌」。密钥只从本地配置读取，账号和群音色设置存入本地成员数据库。临时 WAV、SILK 在调用结束后清理，配置、数据库和缓存均不应提交。
 
 完整说明见[语音文档](../../docs/messages/voice.md#fish-audio-文字转语音)。

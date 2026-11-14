@@ -326,7 +326,8 @@ class PanelController:
                 else:
                     result[name] = {key: value[key] for key in
                         ('provider', 'base_url', 'model', 'timeout_seconds', 'max_tokens', 'json_mode',
-                         'token_limit_parameter', 'extra_body', 'default_voice', 'max_chars_per_clip') if key in value}
+                         'token_limit_parameter', 'extra_body', 'default_voice', 'max_chars_per_clip',
+                         'sing_instructions') if key in value}
                     if name == 'llm':
                         for key, default in (('json_mode', True), ('token_limit_parameter', 'max_tokens'), ('extra_body', {})):
                             result[name].setdefault(key, default)
@@ -335,6 +336,7 @@ class PanelController:
                         result[name]['vision'] = public_vision(value.get('vision'))
                     if name == 'tts':
                         result[name].setdefault('provider', 'fish')
+                        result[name].setdefault('sing_instructions', '')
                     result[name]['api_key_configured'] = bool(value.get('api_key'))
                     result[name]['api_key'] = value.get('api_key') or ''
             else:
@@ -527,15 +529,15 @@ class PanelController:
 
     def _check_voice_choice(self, room, mode, explicit):
         from .members import MemberError
-        from .tts import VOICE_ID, normalize_voice_id
+        from .tts import VOICE_ID, VOICE_ID_HINT, normalize_voice_id
         supplied = normalize_voice_id(explicit)
         if supplied and not VOICE_ID.fullmatch(supplied):
-            raise MemberError('音色 ID 无效。Fish 是 32 位十六进制，Breeze 以 voc_ 开头')
+            raise MemberError(VOICE_ID_HINT)
         if mode == 'off':
             return
         chosen = self._voice_candidate(room, supplied)
         if not chosen or not VOICE_ID.fullmatch(chosen):
-            raise MemberError('请填写本群音色 ID，或在「模型与语音」中填写默认音色 ID')
+            raise MemberError(VOICE_ID_HINT if chosen else '请填写本群音色 ID，或在「模型与语音」中填写默认音色 ID')
 
     def _apply_voice_mode(self, room, mode, explicit=''):
         from .members import MemberError

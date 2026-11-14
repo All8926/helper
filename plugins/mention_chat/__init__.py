@@ -203,9 +203,9 @@ class Plugin:
         return bool(state.enabled and state.mode == "auto" and state.voice_id)
 
     def _sung(self, message, ctx, reply, delivery_guard):
-        """正文被判成歌词且开了 Breeze 语音时清唱。唱出去返回 True，调用方就不再念或打字。"""
+        """正文被判成歌词且当前语音会跟唱歌指令时清唱。唱出去返回 True，调用方就不再念或打字。"""
         speech = getattr(ctx, "_speech", None)
-        if speech is None or not getattr(speech, "enabled", False) or not speech.uses_breeze():
+        if speech is None or not getattr(speech, "enabled", False) or not speech.can_sing():
             return False
         try:
             selected, voice = speech.selected(message.chat_id)

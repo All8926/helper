@@ -1,5 +1,6 @@
 """Fish 协议与流式 WAV 长度校正；所有 HTTP 使用内存响应。"""
 from io import BytesIO
+import base64
 import http.client
 import json
 from pathlib import Path
@@ -11,7 +12,7 @@ import urllib.error
 import urllib.parse
 import wave
 
-from wxbot_framework.tts import BreezeTTS, FishTTS, TTSError, client_from_options, normalize_wav
+from wxbot_framework.tts import BreezeTTS, DoubaoTTS, FishTTS, TTSError, client_from_options, normalize_wav
 
 
 def wav(seconds=0.1, rate=24000, channels=1):
@@ -148,6 +149,50 @@ class TTSTests(unittest.TestCase):
         rooted = BreezeTTS.from_options({"api_key": "placeholder", "base_url": "https://api.breeze.blue/v1/voices",
                                          "model": "breeze-tts-2"})
         self.assertEqual(rooted.base_url, "https://api.breeze.blue")
+        self.assertEqual(rooted.sing_instructions, "唱歌")
+        custom = BreezeTTS.from_options({"api_key": "placeholder", "sing_instructions": "  慢一点  "})
+        self.assertEqual(custom.sing_instructions, "慢一点")
+
+    def test_doubao_speaks_pcm_and_sings_with_context_texts(self):
+        self.assertIsInstance(client_from_options({
+            "provider": "doubao", "api_key": "placeholder", "default_voice": "zh_female_vv_uranus_bigtts",
+        }), DoubaoTTS)
+        with self.assertRaises(TTSError):
+            client_from_options({"provider": "doubao", "api_key": "placeholder", "model": "breeze-tts-2"})
+        with self.assertRaises(TTSError):
+            client_from_options({"provider": "other", "api_key": "placeholder"})
+        client = DoubaoTTS.from_options({
+            "api_key": "placeholder",
+            "base_url": "https://openspeech.bytedance.com/api/v3/tts/unidirectional",
+            "default_voice": "zh_female_vv_uranus_bigtts",
+            "sing_instructions": "",
+        })
+        self.assertEqual(client.base_url, "https://openspeech.bytedance.com")
+        self.assertEqual(client.sing_instructions, "唱歌")
+        self.assertEqual(client.voices()[0].id, "zh_female_vv_uranus_bigtts")
+        self.assertEqual(client.public_voices(keyword="vivi").voices, ())
+        self.assertEqual(client.public_voice("zh_male_m191_uranus_bigtts").name, "zh_male_m191_uranus_bigtts")
+        pcm = b"\0\0" * 240
+        body = json.dumps({"code": 0, "data": base64.b64encode(pcm[:240]).decode()}).encode()
+        body += b"\n" + json.dumps({"code": 0, "data": base64.b64encode(pcm[240:]).decode()}).encode()
+        body += b"\n" + json.dumps({"code": 20000000, "message": "private-detail"}).encode()
+        with patch.object(DoubaoTTS, "_request", return_value=body) as request:
+            audio = client.synthesize("夜空", "zh_female_vv_uranus_bigtts", instructions="唱歌", guidance_scale=2)
+        self.assertEqual(normalize_wav(audio), audio)
+        payload = request.call_args.kwargs["payload"]
+        self.assertEqual(payload["req_params"]["text"], "夜空")
+        self.assertEqual(payload["req_params"]["speaker"], "zh_female_vv_uranus_bigtts")
+        self.assertEqual(payload["req_params"]["audio_params"], {"format": "pcm", "sample_rate": 24000})
+        self.assertEqual(json.loads(payload["req_params"]["additions"])["context_texts"], ["唱歌"])
+        self.assertNotIn("guidance_scale", payload["req_params"])
+        self.assertEqual(request.call_args.args[0], "/api/v3/tts/unidirectional")
+        self.assertNotIn(client.api_key, repr(client))
+        with patch.object(DoubaoTTS, "_request", return_value=json.dumps(
+                {"code": 45000000, "message": "private-detail"}).encode()):
+            with self.assertRaises(TTSError) as caught:
+                client.synthesize("夜空", "zh_female_vv_uranus_bigtts")
+        self.assertNotIn("private-detail", str(caught.exception))
+        self.assertIn("45000000", str(caught.exception))
 
 
 if __name__ == '__main__':

@@ -12,7 +12,8 @@ SYNTHETIC = {"llm": "current-llm", "tts": "current-tts", "decision": "current-de
 FIELDS = {
     "llm": ("base_url", "model", "timeout_seconds", "max_tokens", "json_mode",
             "token_limit_parameter", "extra_body", "web_search", "vision"),
-    "tts": ("provider", "base_url", "model", "timeout_seconds", "default_voice", "max_chars_per_clip"),
+    "tts": ("provider", "base_url", "model", "timeout_seconds", "default_voice", "max_chars_per_clip",
+            "sing_instructions"),
     "decision": ("enabled", "base_url", "model", "timeout_seconds", "fallback"),
 }
 

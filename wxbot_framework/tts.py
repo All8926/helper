@@ -1,8 +1,9 @@
-"""Fish Audio 与 Breeze Blue 的音色查询和 WAV 合成；密钥与服务响应不写入日志。"""
+"""Fish Audio、Breeze Blue 与豆包语音的音色查询和 WAV 合成；密钥与服务响应不写入日志。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from io import BytesIO
+import base64
 import json
 import http.client
 import math
@@ -12,13 +13,17 @@ import struct
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import wave
 
 MAX_AUDIO_BYTES = 20 * 1024 * 1024
 FISH_VOICE_ID = re.compile(r"^[0-9a-f]{32}$")
 BREEZE_VOICE_ID = re.compile(r"^voc_[A-Za-z0-9]{6,40}$")
-# 库存两种服务的音色 ID。各自合成时仍按自己的格式再查一次。
-VOICE_ID = re.compile(r"^(?:[0-9a-f]{32}|voc_[A-Za-z0-9]{6,40})$")
+# 官方 speaker 带下划线，例如 zh_female_vv_uranus_bigtts。不把纯十六进制收成豆包 ID。
+DOUBAO_VOICE_ID = re.compile(r"^(?:S_[A-Za-z0-9]{4,40}|[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]{4,80})$")
+VOICE_ID = re.compile(
+    r"^(?:[0-9a-f]{32}|voc_[A-Za-z0-9]{6,40}|S_[A-Za-z0-9]{4,40}|[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]{4,80})$")
+VOICE_ID_HINT = "音色 ID 无效。Fish 是 32 位十六进制，Breeze 以 voc_ 开头，豆包是带下划线的 speaker"
 
 
 def normalize_voice_id(value):
@@ -31,10 +36,26 @@ def normalize_voice_id(value):
     return text
 FISH_MODELS = ("s2.1-pro-free", "s2.1-pro", "s2-pro", "s1", "drama-3")
 BREEZE_MODELS = ("breeze-tts-2", "breeze-tts-2-multilingual")
+DOUBAO_MODELS = ("seed-tts-2.0",)
+DEFAULT_SING_INSTRUCTIONS = "唱歌"
 
 
 class TTSError(RuntimeError):
     pass
+
+
+def sing_instructions_from(value):
+    """空白用「唱歌」。写出来的说明收成一行，最多 200 字。"""
+    if value is None:
+        return DEFAULT_SING_INSTRUCTIONS
+    if not isinstance(value, str):
+        raise TTSError("唱歌指令应为一段文字")
+    text = " ".join(value.split())
+    if not text:
+        return DEFAULT_SING_INSTRUCTIONS
+    if len(text) > 200 or any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        raise TTSError("唱歌指令应为最多 200 字的一行文字")
+    return text
 
 
 @dataclass(frozen=True)
@@ -264,6 +285,9 @@ class BreezeTTS:
     default_voice: str = ''
     timeout_seconds: float = 45
     max_chars_per_clip: int = 160
+    sing_instructions: str = DEFAULT_SING_INSTRUCTIONS
+    sings: bool = True
+    sing_prefix: str = "[唱歌]"
 
     @classmethod
     def from_options(cls, data):
@@ -296,7 +320,8 @@ class BreezeTTS:
             raise TTSError("语音 timeout_seconds 应为 1–120 秒")
         if type(size) is not int or not 20 <= size <= 180:
             raise TTSError("max_chars_per_clip 应为 20–180 的整数")
-        return cls(base.rstrip('/'), key.strip(), model, default.strip(), timeout, size)
+        return cls(base.rstrip('/'), key.strip(), model, default.strip(), timeout, size,
+                   sing_instructions_from(data.get("sing_instructions")))
 
     def accepts(self, value):
         return isinstance(value, str) and BREEZE_VOICE_ID.fullmatch(value) is not None
@@ -393,16 +418,186 @@ class BreezeTTS:
         return normalize_wav(data)
 
 
+def _page_query(page, page_size, keyword, all_languages):
+    if type(page) is not int or not 1 <= page <= 1000:
+        raise TTSError('音色页码应为 1–1000 的整数')
+    if type(page_size) is not int or not 1 <= page_size <= 100:
+        raise TTSError('音色分页大小应为 1–100 的整数')
+    if type(all_languages) is not bool:
+        raise TTSError('音色语言范围应为布尔值')
+    if (not isinstance(keyword, str) or len(keyword) > 128 or
+            any(ord(ch) < 32 or ord(ch) == 127 for ch in keyword)):
+        raise TTSError('音色搜索词应为最多 128 字符的单行文字')
+
+
+def _pcm_wav(pcm, rate=24000):
+    """豆包流式接口用 PCM，这里包成微信能收的单声道 WAV。"""
+    if not pcm or len(pcm) % 2:
+        raise TTSError("豆包语音音频数据无效")
+    output = BytesIO()
+    with wave.open(output, "wb") as target:
+        target.setnchannels(1)
+        target.setsampwidth(2)
+        target.setframerate(rate)
+        target.writeframes(pcm)
+    return normalize_wav(output.getvalue())
+
+
+def _doubao_pcm(raw):
+    """拼起分段 JSON 里的 PCM。完成码 20000000 不算音频；错误只保留数字码。"""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise TTSError("豆包语音响应格式不正确") from None
+    decoder = json.JSONDecoder()
+    index, chunks = 0, []
+    while index < len(text):
+        while index < len(text) and text[index] in " \r\n\t":
+            index += 1
+        if index >= len(text):
+            break
+        try:
+            item, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            raise TTSError("豆包语音响应格式不正确") from None
+        if not isinstance(item, dict):
+            raise TTSError("豆包语音响应格式不正确")
+        code = item.get("code", 0)
+        if type(code) is not int:
+            raise TTSError("豆包语音响应格式不正确")
+        if code == 20000000:
+            continue
+        if code != 0:
+            raise TTSError(f"豆包语音合成失败（{code}）")
+        data = item.get("data")
+        if data in (None, ""):
+            continue
+        if not isinstance(data, str):
+            raise TTSError("豆包语音响应格式不正确")
+        try:
+            chunks.append(base64.b64decode(data, validate=True))
+        except ValueError:
+            raise TTSError("豆包语音音频数据无效") from None
+    pcm = b"".join(chunks)
+    if not pcm:
+        raise TTSError("豆包语音未返回音频")
+    return pcm
+
+
+@dataclass(frozen=True)
+class DoubaoTTS:
+    """豆包语音合成 2.0。文档：https://www.volcengine.com/docs/6561/1598757"""
+
+    base_url: str
+    api_key: str = field(repr=False)
+    model: str = "seed-tts-2.0"
+    default_voice: str = ""
+    timeout_seconds: float = 45
+    max_chars_per_clip: int = 160
+    sing_instructions: str = DEFAULT_SING_INSTRUCTIONS
+    sings: bool = True
+    sing_prefix: str = ""
+
+    @classmethod
+    def from_options(cls, data):
+        if not isinstance(data, dict):
+            raise TTSError("语音配置必须是 JSON 对象")
+        base = data.get("base_url", "https://openspeech.bytedance.com")
+        key = data.get("api_key")
+        model = data.get("model", "seed-tts-2.0")
+        default = data.get("default_voice", "")
+        timeout = data.get("timeout_seconds", 45)
+        size = data.get("max_chars_per_clip", 160)
+        if not isinstance(base, str):
+            raise TTSError("语音接口地址无效")
+        base = base.rstrip("/")
+        suffix = "/api/v3/tts/unidirectional"
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+        parsed = urllib.parse.urlsplit(base)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise TTSError("语音接口地址必须是无凭据的 HTTPS 地址")
+        if not isinstance(key, str) or not key.strip() or any(not 33 <= ord(ch) <= 126 for ch in key):
+            raise TTSError("请在 tts_config.json 填写有效 api_key")
+        if model not in DOUBAO_MODELS:
+            raise TTSError("语音 model 应为 seed-tts-2.0")
+        if not isinstance(default, str) or (default and DOUBAO_VOICE_ID.fullmatch(default.strip()) is None):
+            raise TTSError("默认音色应为豆包 speaker ID，例如 zh_female_vv_uranus_bigtts")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 1 <= timeout <= 120:
+            raise TTSError("语音 timeout_seconds 应为 1–120 秒")
+        if type(size) is not int or not 20 <= size <= 180:
+            raise TTSError("max_chars_per_clip 应为 20–180 的整数")
+        return cls(base.rstrip("/"), key.strip(), model, default.strip(), timeout, size,
+                   sing_instructions_from(data.get("sing_instructions")))
+
+    def accepts(self, value):
+        return isinstance(value, str) and DOUBAO_VOICE_ID.fullmatch(value) is not None
+
+    def _request(self, path, *, payload, limit):
+        headers = {
+            "X-Api-Key": self.api_key,
+            "X-Api-Resource-Id": self.model,
+            "X-Api-Request-Id": uuid.uuid4().hex,
+            "Content-Type": "application/json",
+            "User-Agent": "helper-doubao-tts",
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(self.base_url + path, data=body, headers=headers)
+        try:
+            with urllib.request.build_opener(_NoRedirect()).open(request, timeout=self.timeout_seconds) as response:
+                data = response.read(limit + 1)
+        except urllib.error.HTTPError as error:
+            raise TTSError(f"豆包语音请求失败（HTTP {error.code}）") from None
+        except (OSError, TimeoutError, urllib.error.URLError, http.client.HTTPException):
+            raise TTSError("豆包语音连接失败或超时") from None
+        if len(data) > limit:
+            raise TTSError("豆包语音响应超过大小限制")
+        return data
+
+    def voices(self):
+        # 音色库要另一套 AK/SK。这里只列出配置好的 speaker，名称就用 ID。
+        if not self.default_voice:
+            return ()
+        return (Voice(self.default_voice, self.default_voice),)
+
+    def public_voices(self, *, page=1, keyword="", page_size=10, all_languages=False):
+        _page_query(page, page_size, keyword, all_languages)
+        return VoicePage((), page, page_size, False)
+
+    def public_voice(self, identifier):
+        if not self.accepts(identifier):
+            raise TTSError("公开音色 ID 无效")
+        return Voice(identifier, identifier)
+
+    def synthesize(self, text, voice_id, *, instructions="", guidance_scale=None):
+        if not isinstance(text, str) or not text.strip() or len(text) > self.max_chars_per_clip or "\0" in text:
+            raise TTSError("合成文本为空或超过单条长度限制")
+        if not self.accepts(voice_id):
+            raise TTSError("合成音色 ID 无效")
+        params = {"text": text, "speaker": voice_id, "audio_params": {"format": "pcm", "sample_rate": 24000}}
+        if instructions:
+            if not isinstance(instructions, str) or "\0" in instructions:
+                raise TTSError("清唱说明无效")
+            # 官方只采用第一条语音指令，所以这里只放一句。
+            params["additions"] = json.dumps({"context_texts": [instructions]}, ensure_ascii=False)
+        payload = {"user": {"uid": "helper"}, "req_params": params}
+        pcm = _doubao_pcm(self._request("/api/v3/tts/unidirectional", payload=payload, limit=MAX_AUDIO_BYTES))
+        return _pcm_wav(pcm)
+
+
 def client_from_options(data):
     """没写 provider 的旧配置继续用 Fish Audio。"""
     if not isinstance(data, dict):
         raise TTSError("语音配置必须是 JSON 对象")
-    provider = data.get('provider', 'fish')
-    if provider == 'fish':
+    sing_instructions_from(data.get("sing_instructions"))
+    provider = data.get("provider", "fish")
+    if provider == "fish":
         return FishTTS.from_options(data)
-    if provider == 'breeze':
+    if provider == "breeze":
         return BreezeTTS.from_options(data)
-    raise TTSError("语音 provider 应为 fish 或 breeze")
+    if provider == "doubao":
+        return DoubaoTTS.from_options(data)
+    raise TTSError("语音 provider 应为 fish、breeze 或 doubao")
 
 
 def open_tts(path):
