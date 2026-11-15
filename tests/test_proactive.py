@@ -14,7 +14,7 @@ from fake_llm import FakeLLM
 from plugins.mention_chat import Plugin
 from wxbot_framework import proactive as pro
 from wxbot_framework.chat_tools import chat_tools
-from wxbot_framework.dialogue import SING_CRITERIA, sing_state, singable
+from wxbot_framework.dialogue import SING_CRITERIA, checked_reply, sing_state, singable
 from wxbot_framework.llm import LLMError
 from wxbot_framework.room_behavior import BehaviorError, normalize_global_prompt, normalize_reply_limit, normalize_room_setting
 from wxbot_framework.sdk import Message
@@ -512,3 +512,15 @@ class PluginTests(unittest.TestCase):
         while time.perf_counter() < deadline and not self.looked:
             time.sleep(0.05)
         self.assertIn(vision_data_url(red), self.looked)
+
+
+class ReplyCleanupTests(unittest.TestCase):
+    def test_final_json_keeps_only_the_sentence_and_protocol_notes_are_dropped(self):
+        wrapped = '{"action":"final","text":"哈哈，原来你才是那个一次性耗材。"}'
+        self.assertEqual(checked_reply(wrapped, 600), "哈哈，原来你才是那个一次性耗材。")
+        fenced = '```json\n{"action":"final","reply":"就这？"}\n```'
+        self.assertEqual(checked_reply(fenced, 600), "就这？")
+        note = "(此时没有current为true的用户消息，不需要回应，输出空)"
+        with self.assertRaises(LLMError):
+            checked_reply(note, 600)
+        self.assertEqual(checked_reply("今晚吃火锅", 600), "今晚吃火锅")

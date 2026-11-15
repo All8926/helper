@@ -102,12 +102,37 @@ def working_messages(messages):
     return chosen
 
 
+_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.S)
+
+
+def _plain_reply(text):
+    """拆掉 action/text 外壳。解释 current、不需要回应或输出空的，当成没写。"""
+    raw = text.strip()
+    fenced = _FENCE.fullmatch(raw)
+    if fenced:
+        raw = fenced.group(1).strip()
+    if raw.startswith("{") and raw.endswith("}"):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict) and "action" in data:
+            body = data.get("text", data.get("reply"))
+            raw = body.strip() if isinstance(body, str) else ""
+    if re.search(r"current", raw, re.I) and re.search(r"为\s*(?:true|false)|不需要回应|输出空", raw, re.I):
+        return ""
+    return raw
+
+
 def checked_reply(text, limit):
-    """模型正文的最后检查：不能为空、不能过长、不能带控制字符。"""
-    if (not isinstance(text, str) or not text.strip() or len(text) > limit or
-            any(ord(char) < 32 and char not in "\n\r\t" for char in text)):
+    """模型正文的最后检查：取出可发送的话，不能为空、不能过长、不能带控制字符。"""
+    if not isinstance(text, str):
         raise LLMError("大模型对话结果为空或过长，请重试")
-    return text.strip()
+    reply = _plain_reply(text)
+    if (not reply or len(reply) > limit or
+            any(ord(char) < 32 and char not in "\n\r\t" for char in reply)):
+        raise LLMError("大模型对话结果为空或过长，请重试")
+    return reply
 
 
 class Dialogue:
