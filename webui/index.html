@@ -213,23 +213,48 @@
     <section class="section" aria-labelledby="task-list-heading"><div class="section-heading"><h2 id="task-list-heading">任务列表</h2><button id="task-refresh" class="secondary small" type="button">刷新</button></div><p id="task-status" class="account-error" role="status" aria-live="polite"></p><div class="table-container"><table class="task-table"><thead><tr><th>任务与会话</th><th>执行时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="task-list"><tr><td colspan="4" class="table-empty">暂无任务。</td></tr></tbody></table></div></section>
   </section>
   <section class="page hidden" id="page-private" aria-labelledby="private-heading">
-    <div class="page-heading"><div><h1 id="private-heading">私聊对话</h1><p>名单里的联系人发来文字就会回复。上下文小时数和条数所有人共用；名称、人格、深度思考、语音和音色按人分开。需要在插件管理启用「私聊对话」，并打开成员记录。</p></div></div>
-    <form id="private-chat-form" class="settings-section">
-      <label for="private-contacts">联系人微信 ID（每行一个）</label>
-      <textarea id="private-contacts" rows="6" spellcheck="false" placeholder="wxid_example_friend" autocomplete="off"></textarea>
-      <div class="member-pick-head">
-        <span>从已扫描的联系人加入</span>
-        <button id="private-scan" class="text-button" type="button">读取联系人</button>
+    <div class="page-heading"><div><h1 id="private-heading">私聊对话</h1><p>名单里的联系人发来文字就会回复。上下文所有人共用；点左侧一个人，再改这个人的名称、人格和语音。需要在插件管理启用「私聊对话」，并打开成员记录。</p></div></div>
+    <form id="private-chat-form">
+      <div class="behavior-layout">
+        <div class="room-pick-pane">
+          <h2>已接入的联系人</h2>
+          <p class="section-description">点一个人再编辑。人多时列表可以滚动。</p>
+          <div class="member-pick-head">
+            <input id="private-search" type="search" placeholder="搜索已扫描的联系人" autocomplete="off" aria-label="搜索联系人">
+            <button id="private-scan" class="text-button" type="button">读取联系人</button>
+          </div>
+          <div id="private-picks" class="room-pick-list private-candidates" aria-label="可加入的联系人"></div>
+          <div class="private-add-row">
+            <input id="private-wxid" placeholder="或粘贴微信 ID" spellcheck="false" autocomplete="off" aria-label="微信 ID">
+            <button id="private-add" class="secondary" type="button">加入</button>
+          </div>
+          <div id="private-list" class="room-pick-list" aria-label="已接入的联系人"></div>
+        </div>
+        <div class="settings-section">
+          <h2 id="private-title">当前联系人</h2>
+          <p id="private-empty" class="section-description">先从左侧加入一个联系人。</p>
+          <div id="private-fields" class="hidden">
+            <p id="private-id" class="group-name-hint"></p>
+            <label for="private-name">名称<input id="private-name" maxlength="64" placeholder="留空。能读到微信昵称时会自动填上" autocomplete="off"></label>
+            <label for="private-personality">人格<select id="private-personality"></select></label>
+            <label class="inline" for="private-thinking"><input id="private-thinking" type="checkbox" checked>深度思考</label>
+            <div class="field-pair three">
+              <label for="private-voice">语音回复<select id="private-voice"><option value="off">关闭（文字）</option><option value="always">始终语音</option><option value="auto">自动</option></select></label>
+              <label for="private-voice-threshold">语音门槛（0–1）<input id="private-voice-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>
+              <label for="private-sing">清唱门槛（0–1）<input id="private-sing" type="number" min="0" max="1" step="0.05" value="0.85"></label>
+            </div>
+            <label for="private-voice-id">音色 ID<input id="private-voice-id" placeholder="留空则用模型与语音里的默认音色 ID" spellcheck="false" autocomplete="off"></label>
+            <p class="group-name-hint">关闭后只用文字。自动时，决策概率达到语音门槛才念。清唱要达到清唱门槛。音色留空时使用默认音色 ID。</p>
+            <button id="private-remove" class="text-button" type="button">移出名单</button>
+          </div>
+          <div class="field-pair private-shared">
+            <label for="private-hours">共用上下文小时数<input id="private-hours" type="number" min="1" max="168" step="1" value="6"></label>
+            <label for="private-limit">共用上下文最多条数<input id="private-limit" type="number" min="1" max="2000" step="1" value="300"></label>
+          </div>
+          <p class="group-name-hint">小时数和条数对所有私聊相同。真正送给模型的仍是最新的 24 条、合计不超过 2400 字。</p>
+          <div class="form-footer"><span class="live-hint">保存后立即生效。收发白名单非空时，这些联系人会一并加入白名单。语音需要同时启用「语音回复」。</span><button id="save-private-chat" class="primary" type="submit">保存私聊</button></div>
+        </div>
       </div>
-      <input id="private-search" type="search" placeholder="搜索备注、昵称或微信 ID" autocomplete="off" aria-label="搜索联系人">
-      <div id="private-picks" class="member-picks"></div>
-      <div class="field-pair">
-        <label for="private-hours">上下文小时数<input id="private-hours" type="number" min="1" max="168" step="1" value="6"></label>
-        <label for="private-limit">上下文最多条数<input id="private-limit" type="number" min="1" max="2000" step="1" value="300"></label>
-      </div>
-      <p class="group-name-hint">这是所有私聊共用的读取上限。真正送给模型的仍是最新的 24 条、合计不超过 2400 字。</p>
-      <div id="private-people"></div>
-      <div class="form-footer"><span class="live-hint">保存后立即生效。收发白名单非空时，这些联系人会一并加入白名单。语音需要同时启用「语音回复」。</span><button id="save-private-chat" class="primary" type="submit">保存私聊</button></div>
     </form>
   </section>
   <section class="page hidden" id="page-contacts" aria-labelledby="contacts-heading">

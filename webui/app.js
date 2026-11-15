@@ -43,7 +43,7 @@ let groupNameDraft = new Map(), discoveredGroups = [];
 let behaviorRoom = '', behaviorDraft = new Map(), behaviorDirty = false, behaviorMembers = [], memberPickGeneration = 0, membersExpanded = false, memberListRoom = '';
 let personalityItems = [], personalityDirty = false;
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
-let privateDirty=false, privatePeople={}, privatePickRows=[], privateNameTouched=new Set();
+let privateDirty=false, privatePeople={}, privateOrder=[], privateSelected='', privatePickRows=[], privateNameTouched=new Set();
 const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
 const activeStates = ['starting','running','stopping'];
@@ -297,86 +297,98 @@ function defaultPrivatePerson(id) {
   const nickname = String(known?.nickname || '').trim();
   return {name: nickname, personality: '默认', deep_thinking: true, voice_mode: 'off', voice_id: '', voice_threshold: 0.6, sing_threshold: 0.85};
 }
+function privateVoiceLabel(mode) {
+  return mode === 'always' ? '始终语音' : mode === 'auto' ? '自动' : '文字';
+}
+function readPrivateEditor() {
+  if (!privateSelected || $('#private-fields').classList.contains('hidden')) return;
+  privatePeople[privateSelected] = {
+    name: $('#private-name').value.trim(),
+    personality: $('#private-personality').value || '默认',
+    deep_thinking: $('#private-thinking').checked,
+    voice_mode: $('#private-voice').value,
+    voice_threshold: contextDecimal($('#private-voice-threshold').value, 0.6),
+    sing_threshold: contextDecimal($('#private-sing').value, 0.85),
+    voice_id: $('#private-voice-id').value.trim()
+  };
+}
 function renderPrivateChat() {
   const saved = config?.private_chat || {};
   if (!privateDirty) {
     privatePeople = JSON.parse(JSON.stringify(saved.people || {}));
+    privateOrder = [...(saved.contacts || [])];
     privateNameTouched = new Set();
-    $('#private-contacts').value = (saved.contacts || []).join('\n');
+    for (const id of privateOrder) if (!privatePeople[id]) privatePeople[id] = defaultPrivatePerson(id);
+    if (!privateOrder.includes(privateSelected)) privateSelected = privateOrder[0] || '';
     $('#private-hours').value = contextNumber(saved.context_hours, 6);
     $('#private-limit').value = contextNumber(saved.context_limit, 300);
   }
-  renderPrivatePeople();
+  renderPrivateList();
+  fillPrivateEditor();
   paintPrivatePicks();
 }
-function renderPrivatePeople() {
-  const ids = lines($('#private-contacts').value);
-  const next = {};
-  for (const id of ids) next[id] = privatePeople[id] || defaultPrivatePerson(id);
-  privatePeople = next;
-  const personalities = ['默认', ...(config?.personalities || []).map(item => item.name)];
-  const root = $('#private-people');
-  if (!root) return;
-  root.innerHTML = ids.map(id => {
-    const person = privatePeople[id];
-    const selected = personalities.includes(person.personality) ? person.personality : '默认';
-    const options = personalities.map(name => `<option value="${escape(name)}" ${name === selected ? 'selected' : ''}>${escape(name === '默认' ? '默认（不使用人格）' : name)}</option>`).join('');
-    const mode = ['off', 'always', 'auto'].includes(person.voice_mode) ? person.voice_mode : 'off';
-    return `<section class="private-person" data-wxid="${escape(id)}">
-      <h3>${escape(person.name || id)}</h3>
-      <p class="group-name-hint">${escape(id)}</p>
-      <label>名称<input data-field="name" maxlength="64" value="${escape(person.name || '')}" placeholder="留空。能读到微信昵称时会自动填上" autocomplete="off"></label>
-      <label>人格<select data-field="personality">${options}</select></label>
-      <label class="inline"><input data-field="deep_thinking" type="checkbox" ${person.deep_thinking !== false ? 'checked' : ''}>深度思考</label>
-      <div class="field-pair three">
-        <label>语音回复<select data-field="voice_mode"><option value="off" ${mode === 'off' ? 'selected' : ''}>关闭（文字）</option><option value="always" ${mode === 'always' ? 'selected' : ''}>始终语音</option><option value="auto" ${mode === 'auto' ? 'selected' : ''}>自动</option></select></label>
-        <label>语音门槛（0–1）<input data-field="voice_threshold" type="number" min="0" max="1" step="0.05" value="${person.voice_threshold ?? 0.6}"></label>
-        <label>清唱门槛（0–1）<input data-field="sing_threshold" type="number" min="0" max="1" step="0.05" value="${person.sing_threshold ?? 0.85}"></label>
-      </div>
-      <label>音色 ID<input data-field="voice_id" value="${escape(person.voice_id || '')}" placeholder="留空则用模型与语音里的默认音色 ID" spellcheck="false" autocomplete="off"></label>
-      <p class="group-name-hint">关闭后只用文字。自动时，决策概率达到语音门槛才念。清唱要达到清唱门槛。音色留空时使用默认音色 ID。</p>
-    </section>`;
-  }).join('') || '<p class="group-name-hint">先添加联系人，再为每个人设置名称和语音。</p>';
+function renderPrivateList() {
+  const root = $('#private-list');
+  root.innerHTML = privateOrder.map(id => {
+    const person = privatePeople[id] || defaultPrivatePerson(id);
+    const pressed = id === privateSelected;
+    return `<button type="button" class="room-pick" data-private-id="${escape(id)}" aria-pressed="${pressed}"><span class="room-pick-text"><strong>${escape(person.name || id)}</strong><small>${escape(id)}</small></span><small>${escape(privateVoiceLabel(person.voice_mode))}</small></button>`;
+  }).join('') || '<p class="group-name-hint">还没有联系人。</p>';
 }
-function readPrivatePeople() {
-  const root = $('#private-people');
-  if (!root) return;
-  for (const card of root.querySelectorAll('[data-wxid]')) {
-    const id = card.dataset.wxid;
-    const field = name => card.querySelector(`[data-field="${name}"]`);
-    const name = field('name');
-    if (!name) continue;
-    privatePeople[id] = {
-      name: name.value.trim(),
-      personality: field('personality').value || '默认',
-      deep_thinking: field('deep_thinking').checked,
-      voice_mode: field('voice_mode').value,
-      voice_threshold: contextDecimal(field('voice_threshold').value, 0.6),
-      sing_threshold: contextDecimal(field('sing_threshold').value, 0.85),
-      voice_id: field('voice_id').value.trim()
-    };
+function fillPrivateEditor() {
+  const fields = $('#private-fields');
+  const person = privateSelected ? privatePeople[privateSelected] : null;
+  if (!person) {
+    fields.classList.add('hidden');
+    $('#private-empty').classList.remove('hidden');
+    $('#private-title').textContent = '当前联系人';
+    return;
   }
+  const personalities = ['默认', ...(config?.personalities || []).map(item => item.name)];
+  const selected = personalities.includes(person.personality) ? person.personality : '默认';
+  $('#private-empty').classList.add('hidden');
+  fields.classList.remove('hidden');
+  $('#private-title').textContent = person.name || privateSelected;
+  $('#private-id').textContent = privateSelected;
+  $('#private-name').value = person.name || '';
+  $('#private-personality').innerHTML = personalities.map(name => `<option value="${escape(name)}">${escape(name === '默认' ? '默认（不使用人格）' : name)}</option>`).join('');
+  $('#private-personality').value = selected;
+  $('#private-thinking').checked = person.deep_thinking !== false;
+  $('#private-voice').value = ['off', 'always', 'auto'].includes(person.voice_mode) ? person.voice_mode : 'off';
+  $('#private-voice-threshold').value = person.voice_threshold ?? 0.6;
+  $('#private-sing').value = person.sing_threshold ?? 0.85;
+  $('#private-voice-id').value = person.voice_id || '';
+}
+function selectPrivate(id) {
+  if (id === privateSelected) return;
+  readPrivateEditor();
+  privateSelected = privateOrder.includes(id) ? id : '';
+  renderPrivateList();
+  fillPrivateEditor();
+}
+function addPrivate(id) {
+  if (!id) { toast('请输入个人微信 ID', true); return; }
+  readPrivateEditor();
+  if (!privateOrder.includes(id)) {
+    privateOrder.push(id);
+    if (!privatePeople[id]) privatePeople[id] = defaultPrivatePerson(id);
+  }
+  privateSelected = id;
+  privateDirty = true;
+  renderPrivateList();
+  fillPrivateEditor();
+  paintPrivatePicks();
 }
 function paintPrivatePicks() {
   const query = $('#private-search').value.trim().toLowerCase();
-  const selected = new Set(lines($('#private-contacts').value));
-  const rows = privatePickRows.filter(row => !query || [row.remark, row.nickname, row.wxid].some(value => String(value || '').toLowerCase().includes(query)));
-  $('#private-picks').innerHTML = rows.map(row => {
-    const label = row.remark || row.nickname || row.wxid;
-    return `<label class="inline"><input type="checkbox" data-private="${escape(row.wxid)}" ${selected.has(row.wxid) ? 'checked' : ''}>${escape(label)}</label>`;
-  }).join('');
-}
-function togglePrivateContact(wxid, on) {
-  readPrivatePeople();
-  const ids = new Set(lines($('#private-contacts').value));
-  if (on) {
-    ids.add(wxid);
-    if (!privatePeople[wxid]) privatePeople[wxid] = defaultPrivatePerson(wxid);
-  } else ids.delete(wxid);
-  $('#private-contacts').value = [...ids].join('\n');
-  privateDirty = true;
-  renderPrivatePeople();
-  paintPrivatePicks();
+  const root = $('#private-picks');
+  if (!query) { root.innerHTML = ''; return; }
+  const rows = privatePickRows.filter(row => [row.remark, row.nickname, row.wxid].some(value => String(value || '').toLowerCase().includes(query))).slice(0, 8);
+  root.innerHTML = rows.map(row => {
+    const label = row.nickname || row.remark || row.wxid;
+    const joined = privateOrder.includes(row.wxid);
+    return `<button type="button" class="room-pick" data-private-add="${escape(row.wxid)}" aria-pressed="${joined}"><span class="room-pick-text"><strong>${escape(label)}</strong><small>${escape(row.wxid)}</small></span><small>${joined ? '已加入' : '加入'}</small></button>`;
+  }).join('') || '<p class="group-name-hint">没有匹配的联系人。</p>';
 }
 function readPrivateNumber(value, label) {
   const number = Number(value);
@@ -872,44 +884,77 @@ $('#cancel-plugin-reset').onclick=()=>{$('#plugin-reset-confirm').classList.add(
 $('#confirm-plugin-reset').onclick=()=>action(()=>submitPluginSource(true));
 $('#plugin-form').onsubmit=event=>{event.preventDefault();if(!$('#save-plugin-source').disabled)action(()=>submitPluginSource());};
 $('#groups-form').onsubmit=e=>{e.preventDefault();const groups=lines(e.target.elements.groups.value);const data={groups,history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked};if(config&&Object.hasOwn(config,'group_names'))data.group_names=Object.fromEntries(groups.map(room=>[room,groupNameDraft.get(room)||'']));action(()=>save(data));};
-$('#private-contacts').oninput=()=>{readPrivatePeople();privateDirty=true;renderPrivatePeople();paintPrivatePicks();};
 $('#private-hours').oninput=()=>{privateDirty=true;};
 $('#private-limit').oninput=()=>{privateDirty=true;};
-$('#private-people').oninput=event=>{
+$('#private-fields').oninput=event=>{
   privateDirty=true;
-  if(event.target.dataset.field==='name'){
-    const card=event.target.closest('[data-wxid]');
-    if(card)privateNameTouched.add(card.dataset.wxid);
+  if(!privateSelected)return;
+  if(event.target.id==='private-name'){
+    privateNameTouched.add(privateSelected);
+    const title=event.target.value.trim()||privateSelected;
+    $('#private-title').textContent=title;
+    const label=document.querySelector(`[data-private-id="${CSS.escape(privateSelected)}"] strong`);
+    if(label)label.textContent=title;
+  }
+  if(event.target.id==='private-voice'){
+    const label=document.querySelector(`[data-private-id="${CSS.escape(privateSelected)}"] > small`);
+    if(label)label.textContent=privateVoiceLabel(event.target.value);
   }
 };
 $('#private-search').oninput=()=>paintPrivatePicks();
+$('#private-add').onclick=()=>{
+  const id=$('#private-wxid').value.trim();
+  if(!/^[A-Za-z0-9_.@-]{1,127}$/.test(id)||id.endsWith('@chatroom')||id==='filehelper'||id.startsWith('gh_')){
+    toast('请输入个人微信 ID', true);return;
+  }
+  $('#private-wxid').value='';
+  addPrivate(id);
+};
+$('#private-wxid').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();$('#private-add').click();}};
 $('#private-scan').onclick=()=>action(async()=>{
   const data=contactData?.contacts?contactData:await api('contacts');
   privatePickRows=data.contacts||[];
-  readPrivatePeople();
+  readPrivateEditor();
   let filled=false;
-  for (const [id, person] of Object.entries(privatePeople)) {
-    if (person.name || privateNameTouched.has(id)) continue;
+  for (const id of privateOrder) {
+    const person=privatePeople[id];
+    if (!person || person.name || privateNameTouched.has(id)) continue;
     const nickname=String(privatePickRows.find(item=>item.wxid===id)?.nickname||'').trim();
     if (nickname) { person.name=nickname; filled=true; }
   }
-  if (filled) renderPrivatePeople();
-  else paintPrivatePicks();
+  if (filled) { renderPrivateList(); fillPrivateEditor(); }
+  paintPrivatePicks();
   if(!privatePickRows.length)toast('本地缓存中暂无好友');
 });
 $('#private-picks').onclick=event=>{
-  const box=event.target.closest('[data-private]');
-  if(!box)return;
-  togglePrivateContact(box.dataset.private, box.checked);
+  const button=event.target.closest('[data-private-add]');
+  if(!button)return;
+  addPrivate(button.dataset.privateAdd);
+};
+$('#private-list').onclick=event=>{
+  const button=event.target.closest('[data-private-id]');
+  if(button)selectPrivate(button.dataset.privateId);
+};
+$('#private-remove').onclick=()=>{
+  if(!privateSelected)return;
+  const index=privateOrder.indexOf(privateSelected);
+  if(index<0)return;
+  privateOrder.splice(index,1);
+  delete privatePeople[privateSelected];
+  privateNameTouched.delete(privateSelected);
+  privateSelected=privateOrder[index]||privateOrder[index-1]||'';
+  privateDirty=true;
+  renderPrivateList();
+  fillPrivateEditor();
+  paintPrivatePicks();
 };
 $('#private-chat-form').onsubmit=event=>{
   event.preventDefault();
-  readPrivatePeople();
-  const contacts=lines($('#private-contacts').value);
+  readPrivateEditor();
   const people={};
-  for (const id of contacts) people[id]=privatePeople[id]||defaultPrivatePerson(id);
+  for (const id of privateOrder) people[id]=privatePeople[id]||defaultPrivatePerson(id);
   action(async()=>{
-    config=await api('private-chat',{contacts,people,context_hours:readPrivateNumber($('#private-hours').value,'上下文小时数'),context_limit:readPrivateNumber($('#private-limit').value,'上下文条数')});
+    config=await api('private-chat',{contacts:[...privateOrder],people,context_hours:readPrivateNumber($('#private-hours').value,'上下文小时数'),context_limit:readPrivateNumber($('#private-limit').value,'上下文条数')});
     privateDirty=false;
     renderPrivateChat();
     toast('私聊配置已保存');
