@@ -213,11 +213,10 @@
     <section class="section" aria-labelledby="task-list-heading"><div class="section-heading"><h2 id="task-list-heading">任务列表</h2><button id="task-refresh" class="secondary small" type="button">刷新</button></div><p id="task-status" class="account-error" role="status" aria-live="polite"></p><div class="table-container"><table class="task-table"><thead><tr><th>任务与会话</th><th>执行时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="task-list"><tr><td colspan="4" class="table-empty">暂无任务。</td></tr></tbody></table></div></section>
   </section>
   <section class="page hidden" id="page-private" aria-labelledby="private-heading">
-    <div class="page-heading"><div><h1 id="private-heading">私聊对话</h1><p>名单里的联系人发来文字就会回复。所有私聊共用一份上下文和人格。需要在插件管理启用「私聊对话」，并打开成员记录。</p></div></div>
+    <div class="page-heading"><div><h1 id="private-heading">私聊对话</h1><p>名单里的联系人发来文字就会回复。上下文小时数和条数所有人共用；名称、人格、深度思考、语音和音色按人分开。需要在插件管理启用「私聊对话」，并打开成员记录。</p></div></div>
     <form id="private-chat-form" class="settings-section">
       <label for="private-contacts">联系人微信 ID（每行一个）</label>
       <textarea id="private-contacts" rows="6" spellcheck="false" placeholder="wxid_example_friend" autocomplete="off"></textarea>
-      <div id="private-name-list" class="group-name-list" aria-label="联系人备注"></div>
       <div class="member-pick-head">
         <span>从已扫描的联系人加入</span>
         <button id="private-scan" class="text-button" type="button">读取联系人</button>
@@ -228,11 +227,9 @@
         <label for="private-hours">上下文小时数<input id="private-hours" type="number" min="1" max="168" step="1" value="6"></label>
         <label for="private-limit">上下文最多条数<input id="private-limit" type="number" min="1" max="2000" step="1" value="300"></label>
       </div>
-      <p class="group-name-hint">这是读取上限。真正送给模型的仍是最新的 24 条、合计不超过 2400 字。不主动开口，也不发语音。</p>
-      <label for="private-personality">私聊人格</label>
-      <select id="private-personality"></select>
-      <p class="group-name-hint">从现有人格库里选一份，所有私聊共用。</p>
-      <div class="form-footer"><span class="live-hint">保存后立即生效。收发白名单非空时，这些联系人会一并加入白名单。</span><button id="save-private-chat" class="primary" type="submit">保存私聊</button></div>
+      <p class="group-name-hint">这是所有私聊共用的读取上限。真正送给模型的仍是最新的 24 条、合计不超过 2400 字。</p>
+      <div id="private-people"></div>
+      <div class="form-footer"><span class="live-hint">保存后立即生效。收发白名单非空时，这些联系人会一并加入白名单。语音需要同时启用「语音回复」。</span><button id="save-private-chat" class="primary" type="submit">保存私聊</button></div>
     </form>
   </section>
   <section class="page hidden" id="page-contacts" aria-labelledby="contacts-heading">

@@ -55,7 +55,7 @@ class PrivateStoreTests(PrivateFixture, unittest.TestCase):
         self.assertTrue(self.store.record(Message("群里", ROOM, sender_id=FRIEND, is_group=True, session_id="one", sequence=2)))
         self.assertEqual(self.store.recent_room_lines(FRIEND, 3600, 10), [])
         found = self.store.search_room_lines(FRIEND, "你好", 1)
-        self.assertEqual([(row["speaker"], row["text"]) for row in found], [("对方", "你好")])
+        self.assertEqual([(row["speaker"], row["text"]) for row in found], [("朋友", "你好")])
         self.assertTrue(self.store.record_bot_reply(self.message(), "收到，这是私聊回答"))
         reply = self.store.search_room_lines(FRIEND, "私聊回答", 1)
         self.assertEqual(reply[-1]["speaker"], "机器人")
@@ -67,23 +67,48 @@ class PrivateStoreTests(PrivateFixture, unittest.TestCase):
 
     def test_shared_personality_changes_generation_and_rejects_non_contacts(self):
         self.assertEqual(self.store.private_context_window(), (12, 40))
-        first = self.store.private_personality()
+        first = self.store.private_personality(FRIEND)
         self.store.apply_private_chat({
             "contacts": [FRIEND], "context_hours": 12, "context_limit": 40, "personality": "嘴臭"})
-        chosen = self.store.private_personality()
+        chosen = self.store.private_personality(FRIEND)
         self.assertEqual(chosen.name, "嘴臭")
         self.assertGreater(chosen.generation, first.generation)
         again = self.store.apply_private_chat({
             "contacts": [FRIEND], "context_hours": 12, "context_limit": 40, "personality": "嘴臭"})
-        self.assertEqual(self.store.private_personality().generation, chosen.generation)
+        self.assertEqual(self.store.private_personality(FRIEND).generation, chosen.generation)
         self.assertEqual(again["names"], {})
         self.store.apply_personalities([
             {"name": "卑微", "prompt": PROMPTS["卑微"], "previous": "卑微"},
             {"name": "夸夸", "prompt": PROMPTS["夸夸"], "previous": "夸夸"},
         ])
-        reset = self.store.private_personality()
+        reset = self.store.private_personality(FRIEND)
         self.assertEqual(reset.name, "默认")
         self.assertGreater(reset.generation, chosen.generation)
+        self.store.apply_private_chat({
+            "contacts": [FRIEND, OTHER], "context_hours": 12, "context_limit": 40,
+            "people": {
+                FRIEND: {"name": "甲", "personality": "卑微", "deep_thinking": False,
+                         "voice_mode": "auto", "voice_threshold": 0.2, "sing_threshold": 0.4},
+                OTHER: {"name": "", "personality": "夸夸"}}})
+        friend = self.store.private_personality(FRIEND)
+        other = self.store.private_personality(OTHER)
+        self.assertEqual(friend.name, "卑微")
+        self.assertEqual(other.name, "夸夸")
+        self.assertNotEqual(friend.room, other.room)
+        self.assertFalse(self.store.room_deep_thinking(FRIEND))
+        self.assertTrue(self.store.room_deep_thinking(OTHER))
+        self.assertEqual(self.store.room_voice_threshold(FRIEND), 0.2)
+        self.assertEqual(self.store.room_sing_threshold(FRIEND), 0.4)
+        self.assertTrue(self.store.voice_selection(FRIEND).enabled)
+        self.assertEqual(self.store.voice_selection(FRIEND).mode, "auto")
+        self.assertFalse(self.store.voice_selection(OTHER).enabled)
+        self.store.apply_private_chat({
+            "contacts": [FRIEND, OTHER], "context_hours": 12, "context_limit": 40,
+            "people": {
+                FRIEND: {"name": "甲", "personality": "夸夸", "deep_thinking": False, "voice_mode": "auto"},
+                OTHER: {"personality": "夸夸"}}})
+        self.assertGreater(self.store.private_personality(FRIEND).generation, friend.generation)
+        self.assertEqual(self.store.private_personality(OTHER).generation, other.generation)
         with self.assertRaises(MemberError):
             self.store.apply_private_chat({"contacts": [ROBOT]})
         with self.assertRaises(BehaviorError):
@@ -91,13 +116,18 @@ class PrivateStoreTests(PrivateFixture, unittest.TestCase):
         with self.assertRaises(BehaviorError):
             self.store.apply_private_chat({"contacts": [ROOM]})
 
-    def test_snapshot_uses_the_private_window_and_contact_name(self):
-        self.store.remember_wechat_name(FRIEND, "好友甲")
+    def test_snapshot_uses_configured_name_then_wechat_nickname(self):
         self.store.record(self.message())
-        snapshot = self.store.conversation_snapshot(self.message())
-        self.assertEqual(snapshot.speaker_name, "好友甲")
-        self.assertEqual(snapshot.current, "你好")
-        self.assertEqual(snapshot.messages, ())
+        named = self.store.conversation_snapshot(self.message())
+        self.assertEqual(named.speaker_name, "朋友")
+        self.assertEqual(named.current, "你好")
+        self.store.apply_private_chat({
+            "contacts": [FRIEND], "names": {FRIEND: ""}, "context_hours": 12, "context_limit": 40})
+        self.store.remember_wechat_name(FRIEND, "好友甲")
+        self.store.record(self.message("再看一次", sequence=2))
+        fallback = self.store.conversation_snapshot(self.message("再看一次", sequence=2))
+        self.assertEqual(fallback.speaker_name, "好友甲")
+        self.assertEqual([row["text"] for row in fallback.messages], ["你好"])
 
 
 class PrivatePluginTests(PrivateFixture, unittest.TestCase):

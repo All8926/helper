@@ -316,8 +316,52 @@ def normalize_room_setting(value, names):
             "plugin_options": normalize_plugin_options(value.get("plugin_options"))}
 
 
+def _private_personality_name(value, personality_names, *, fallback):
+    if not isinstance(value, str):
+        raise BehaviorError("请选择已保存的人格")
+    personality = value.strip()
+    if personality != RESERVED_PERSONALITY and personality not in personality_names:
+        if not fallback:
+            raise BehaviorError("请选择已保存的人格")
+        return RESERVED_PERSONALITY
+    return personality
+
+
+def normalize_private_person(value, personality_names, *, fallback=False, legacy_name="", legacy_personality=None):
+    """一个人的名称、人格、深度思考和语音。名称可以留空。"""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise BehaviorError("联系人配置格式不正确")
+    name = value.get("name", legacy_name)
+    if name is None:
+        name = ""
+    if not isinstance(name, str) or len(name) > 64 or any(ord(ch) < 32 for ch in name):
+        raise BehaviorError("联系人名称不超过 64 个字符")
+    personality = value.get("personality", legacy_personality if legacy_personality is not None else RESERVED_PERSONALITY)
+    mode = value.get("voice_mode", "off")
+    if mode not in ("off", "always", "auto"):
+        raise BehaviorError("语音回复应为关闭、始终语音或自动")
+    voice_id = value.get("voice_id", "")
+    if voice_id is None:
+        voice_id = ""
+    if not isinstance(voice_id, str):
+        raise BehaviorError("音色 ID 无效")
+    from .tts import VOICE_ID, VOICE_ID_HINT, normalize_voice_id
+    voice_id = normalize_voice_id(voice_id)
+    if voice_id and not VOICE_ID.fullmatch(voice_id):
+        raise BehaviorError(VOICE_ID_HINT)
+    return {"name": name.strip(),
+            "personality": _private_personality_name(personality, personality_names, fallback=fallback),
+            "deep_thinking": normalize_deep_thinking(value.get("deep_thinking")),
+            "voice_mode": mode,
+            "voice_id": voice_id,
+            "voice_threshold": normalize_voice_threshold(value.get("voice_threshold"), value),
+            "sing_threshold": normalize_sing_threshold(value.get("sing_threshold"))}
+
+
 def normalize_private_chat(value, personality_names, *, fallback=False):
-    """私聊名单和共用的上下文、人格。缺省是空名单、6 小时、300 条、默认人格。"""
+    """私聊名单、共用上下文，以及每个人自己的名称、人格和语音。"""
     if value is None:
         value = {}
     if not isinstance(value, dict):
@@ -336,32 +380,26 @@ def normalize_private_chat(value, personality_names, *, fallback=False):
         if wxid not in seen:
             seen.add(wxid)
             contacts.append(wxid)
-    raw_names = value.get("names", {})
-    if raw_names is None:
-        raw_names = {}
+    raw_names = value.get("names") or {}
     if not isinstance(raw_names, dict):
-        raise BehaviorError("联系人备注格式不正确")
-    names = {}
-    for wxid, title in raw_names.items():
-        if wxid not in seen:
-            continue
-        if not isinstance(title, str) or len(title) > 64 or any(ord(ch) < 32 for ch in title):
-            raise BehaviorError("联系人备注不超过 64 个字符")
-        title = title.strip()
-        if title:
-            names[wxid] = title
-    personality = value.get("personality", RESERVED_PERSONALITY)
-    if not isinstance(personality, str):
-        raise BehaviorError("请选择已保存的人格")
-    personality = personality.strip()
-    if personality != RESERVED_PERSONALITY and personality not in personality_names:
-        if not fallback:
-            raise BehaviorError("请选择已保存的人格")
-        personality = RESERVED_PERSONALITY
-    return {"contacts": contacts, "names": names,
+        raise BehaviorError("联系人名称格式不正确")
+    shared = value.get("personality", RESERVED_PERSONALITY)
+    if not isinstance(shared, str):
+        shared = RESERVED_PERSONALITY
+    raw_people = value.get("people") or {}
+    if not isinstance(raw_people, dict):
+        raise BehaviorError("联系人配置格式不正确")
+    people = {}
+    for wxid in contacts:
+        raw = raw_people.get(wxid) if isinstance(raw_people.get(wxid), dict) else None
+        legacy_name = raw_names.get(wxid, "") if isinstance(raw_names.get(wxid), str) else ""
+        people[wxid] = normalize_private_person(
+            raw, personality_names, fallback=fallback, legacy_name=legacy_name,
+            legacy_personality=shared if raw is None or "personality" not in raw else None)
+    names = {wxid: person["name"] for wxid, person in people.items() if person["name"]}
+    return {"contacts": contacts, "names": names, "people": people,
             "context_hours": normalize_context_hours(value.get("context_hours")),
-            "context_limit": normalize_context_limit(value.get("context_limit")),
-            "personality": personality}
+            "context_limit": normalize_context_limit(value.get("context_limit"))}
 
 
 def view_behavior(options):

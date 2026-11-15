@@ -14,7 +14,7 @@ from pathlib import Path
 from .account import validate_account
 from .config import validate_name
 from .memory import DIARY_DAYS, SOURCE_CHARS, SOURCE_LINE_CHARS, SOURCE_LINES
-from .room_behavior import (BehaviorError, PRIVATE_PERSONALITY_ROOM, RESERVED_PERSONALITY,
+from .room_behavior import (BehaviorError, RESERVED_PERSONALITY,
                             alias_mentioned as name_mentioned, normalize_personalities,
                             normalize_private_chat, normalize_room_setting, public_personalities,
                             normalize_global_prompt, normalize_reply_limit, write_json)
@@ -582,10 +582,16 @@ class MemberStore:
                     setting = self.room_settings.get(room)
                     if setting is not None:
                         setting["personality"] = RESERVED_PERSONALITY
-            chosen = self.private_chat["personality"]
-            if chosen not in new_names and chosen != RESERVED_PERSONALITY:
-                self.private_chat = {**self.private_chat, "personality": RESERVED_PERSONALITY}
-                self._sync_private_personality(RESERVED_PERSONALITY)
+            people = dict(self.private_chat.get("people") or {})
+            changed = False
+            for wxid, person in people.items():
+                if person["personality"] not in new_names and person["personality"] != RESERVED_PERSONALITY:
+                    people[wxid] = {**person, "personality": RESERVED_PERSONALITY}
+                    self._sync_private_personality(wxid, RESERVED_PERSONALITY)
+                    changed = True
+            if changed:
+                self.private_chat = {**self.private_chat, "people": people,
+                                     "names": {key: item["name"] for key, item in people.items() if item["name"]}}
             self.personalities = public_personalities(items)
             self._persist_behavior()
 
@@ -625,8 +631,12 @@ class MemberStore:
         for setting in self.room_settings.values():
             if setting.get("personality") == source:
                 setting["personality"] = target
-        if self.private_chat.get("personality") == source:
-            self.private_chat = {**self.private_chat, "personality": target}
+        if self.private_chat.get("people"):
+            people = dict(self.private_chat["people"])
+            for wxid, person in people.items():
+                if person.get("personality") == source:
+                    people[wxid] = {**person, "personality": target}
+            self.private_chat = {**self.private_chat, "people": people}
 
     def _bump_personality(self, name):
         with self._connection() as db:
@@ -658,7 +668,7 @@ class MemberStore:
         self._mutate_config(lambda raw: raw.__setitem__("private_chat", self.private_chat))
 
     def apply_private_chat(self, data):
-        """保存私聊名单和共用的上下文、人格，并立刻作用于当前进程。"""
+        """保存私聊名单和每个人的名称、人格、深度思考与语音，并立刻生效。"""
         cleaned = normalize_private_chat(data, self.personality_names())
         if self.account in cleaned["contacts"]:
             raise MemberError("不能把机器人自己加入私聊名单")
@@ -672,7 +682,8 @@ class MemberStore:
                 self.private_chat = previous
                 self.private_contacts = set(previous["contacts"])
                 raise
-            self._sync_private_personality(cleaned["personality"])
+            for wxid, person in cleaned["people"].items():
+                self._sync_private_personality(wxid, person["personality"])
         return dict(cleaned)
 
     def private_context_window(self):
@@ -680,23 +691,36 @@ class MemberStore:
         chat = self.private_chat
         return chat["context_hours"], chat["context_limit"]
 
-    def private_personality(self):
-        """私聊共用的人格。配置和库里的名字不一致时，以配置为准并刷新代际。"""
-        name = self.private_chat["personality"]
+    def private_person(self, wxid):
+        """这个联系人的单独配置。不在名单里时返回 None。"""
+        if wxid not in self.private_contacts:
+            return None
+        return (self.private_chat.get("people") or {}).get(wxid)
+
+    def private_display_name(self, wxid):
+        """页面上填的名称优先。没填时用见过的微信昵称，都没有就返回空。"""
+        person = self.private_person(wxid) or {}
+        name = person.get("name") or ""
+        return name or self.wechat_name(wxid) or ""
+
+    def private_personality(self, wxid):
+        """这个联系人的人格。配置和库里的名字不一致时，以配置为准并刷新代际。"""
+        person = self.private_person(wxid) or {}
+        name = person.get("personality") or RESERVED_PERSONALITY
         with self._lock:
-            current = self.personality(PRIVATE_PERSONALITY_ROOM)
+            current = self.personality(wxid)
             if current.name != name:
-                return self._sync_private_personality(name)
+                return self._sync_private_personality(wxid, name)
             return current
 
-    def _sync_private_personality(self, name):
-        """写入私聊共用人格。名字变了才增加代际，用来取消还没发出的旧回复。"""
+    def _sync_private_personality(self, wxid, name):
+        """按联系人写入人格。名字变了才增加代际，用来取消这个人还没发出的旧回复。"""
         with self._lock, self._connection() as db:
             db.execute("""INSERT INTO room_personalities VALUES(?,?,?,1)
                 ON CONFLICT(account,room) DO UPDATE SET name=excluded.name,
                 generation=room_personalities.generation+1 WHERE room_personalities.name<>excluded.name""",
-                       (self.account, PRIVATE_PERSONALITY_ROOM, name))
-        return self.personality(PRIVATE_PERSONALITY_ROOM)
+                       (self.account, wxid, name))
+        return self.personality(wxid)
 
     def _mutate_config(self, mutate):
         raw = json.loads(self.config_file.read_text(encoding="utf-8-sig"))
@@ -709,6 +733,12 @@ class MemberStore:
         return self.personality(state.room) == state
 
     def voice_selection(self, room):
+        person = self.private_person(room)
+        if person is not None:
+            mode = person["voice_mode"]
+            enabled = mode in ("always", "auto")
+            return VoiceSelection(room, person["voice_id"], person["voice_id"], enabled, 0,
+                                  "always" if mode == "off" else mode)
         with self._lock:
             row = self._connection().execute(
                 "SELECT voice_id,name,enabled,generation,mode FROM room_voices WHERE account=? AND room=?",
@@ -834,6 +864,9 @@ class MemberStore:
 
     def room_voice_threshold(self, room):
         """自动语音时，决策概率达到这个数才念出来。没写时是 0.6。"""
+        person = self.private_person(room)
+        if person is not None:
+            return person["voice_threshold"]
         from .room_behavior import BehaviorError, DEFAULT_VOICE_THRESHOLD, normalize_voice_threshold
         setting = self.room_settings.get(room) or {}
         try:
@@ -843,6 +876,9 @@ class MemberStore:
 
     def room_sing_threshold(self, room):
         """清唱时，决策概率达到这个数才把正文当成歌词。没写时是 0.85。"""
+        person = self.private_person(room)
+        if person is not None:
+            return person["sing_threshold"]
         from .room_behavior import BehaviorError, DEFAULT_SING_THRESHOLD, normalize_sing_threshold
         setting = self.room_settings.get(room) or {}
         try:
@@ -860,7 +896,10 @@ class MemberStore:
             return DEFAULT_GLANCE_MINUTES
 
     def room_deep_thinking(self, room):
-        """本群是否让 DeepSeek 先思考。没写过时开启。"""
+        """是否让模型先思考。私聊按这个人的开关，群没写过时开启。"""
+        person = self.private_person(room)
+        if person is not None:
+            return person["deep_thinking"]
         from .room_behavior import BehaviorError, normalize_deep_thinking
         setting = self.room_settings.get(room) or {}
         try:
@@ -903,6 +942,8 @@ class MemberStore:
         if bot_generated or sender_id == self.account:
             aliases = (self.room_settings.get(room) or {}).get("aliases") or ()
             return aliases[0] if aliases else "机器人"
+        if room in self.private_contacts:
+            return self.private_display_name(sender_id) or self._other_label(room)
         return self.display_name(sender_id, room) or self._other_label(room)
 
     def conversation_snapshot(self, message):
@@ -945,8 +986,12 @@ class MemberStore:
             member = self.find_by_wxid(message.sender_id, message.chat_id)
             state = db.execute("SELECT generation FROM chat_buffers WHERE account=? AND room=?",
                                (self.account, message.chat_id)).fetchone()
-            speaker = member.name if member else self.display_name(message.sender_id, message.chat_id)
-            return ConversationSnapshot(message.chat_id, day, state[0], speaker or self._other_label(message.chat_id),
+            if private:
+                speaker = self.private_display_name(message.sender_id) or self._other_label(message.chat_id)
+            else:
+                speaker = member.name if member else self.display_name(message.sender_id, message.chat_id)
+                speaker = speaker or self._other_label(message.chat_id)
+            return ConversationSnapshot(message.chat_id, day, state[0], speaker,
                                         tuple(reversed(previous)), message.text)
 
     @contextmanager
