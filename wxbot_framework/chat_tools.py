@@ -171,7 +171,7 @@ def lookup_diary_tool(members, room):
                  "required": ["days"]}, run)
 
 
-def search_history_tool(members, room):
+def search_history_tool(members, room, *, scope="本群"):
     def run(args):
         keyword = _text_arg(args, "keyword", 50)
         days = _int_arg(args, "days", 7, 1, HISTORY_MAX_DAYS)
@@ -180,7 +180,7 @@ def search_history_tool(members, room):
             return "没有找到相关聊天"
         return "\n".join(f"{_moment(row['received_at'])} {row['speaker']}：{row['text']}" for row in rows)
 
-    return Tool("search_history", "按关键词查本群更早的聊天记录，用来回忆之前谁说过什么。",
+    return Tool("search_history", f"按关键词查{scope}更早的聊天记录，用来回忆之前谁说过什么。",
                 {"type": "object", "properties": {
                     "keyword": {"type": "string", "description": "关键词，越短越容易命中"},
                     "days": {"type": "integer", "description": f"往前查几天，1 到 {HISTORY_MAX_DAYS}"}},
@@ -195,4 +195,14 @@ def chat_tools(llm, members, room, *, image=None, speakers=None):
     tools.append(view_image_tool(llm))
     tools += [lookup_memory_tool(members, room, speakers or {}), lookup_diary_tool(members, room),
               search_history_tool(members, room)]
+    return tools
+
+
+def private_chat_tools(llm, members, room):
+    """私聊只用联网搜索、看图和本会话更早的记录。不提供群档案和群日记。"""
+    tools = []
+    if llm.web_search["enabled"]:
+        tools.append(web_search_tool(llm))
+    tools.append(view_image_tool(llm))
+    tools.append(search_history_tool(members, room, scope="这个私聊"))
     return tools

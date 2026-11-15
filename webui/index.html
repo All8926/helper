@@ -20,6 +20,7 @@
     <a href="#overview" data-page="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M9 9v11.5"/></svg>运行概览</a>
     <a href="#plugins" data-page="plugins"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1"/><rect x="14" y="14" width="6.5" height="6.5" rx="1"/></svg>插件管理<span id="nav-plugin-count" class="nav-count">—</span></a>
     <a href="#groups" data-page="groups"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7.5" r="3"/><path d="M3.5 20v-3.5a5.5 5.5 0 0 1 11 0V20M16 4.5a3 3 0 0 1 0 6M17 13a5 5 0 0 1 3.5 4.8V20"/></svg>群聊与会话</a>
+    <a href="#private" data-page="private"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 19.5v-2.2a6.5 6.5 0 0 1 13 0v2.2"/></svg>私聊对话</a>
     <a href="#tasks" data-page="tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>定时任务</a>
     <a href="#contacts" data-page="contacts"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="15.5" height="17" rx="2"/><path d="M3.5 7h3M3.5 12h3M3.5 17h3M10 17v-1a3.5 3.5 0 0 1 7 0v1"/><circle cx="13.5" cy="9" r="2.5"/></svg>联系人</a>
     <a href="#moments" data-page="moments"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg>朋友圈</a>
@@ -210,6 +211,29 @@
       <div class="form-footer"><span class="note">按电脑本地时间执行；离线期间错过的任务不会补发。</span><div><button id="task-cancel" class="text-button hidden" type="button">取消编辑</button><button id="task-save" class="primary" type="submit">保存任务</button></div></div>
     </form>
     <section class="section" aria-labelledby="task-list-heading"><div class="section-heading"><h2 id="task-list-heading">任务列表</h2><button id="task-refresh" class="secondary small" type="button">刷新</button></div><p id="task-status" class="account-error" role="status" aria-live="polite"></p><div class="table-container"><table class="task-table"><thead><tr><th>任务与会话</th><th>执行时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="task-list"><tr><td colspan="4" class="table-empty">暂无任务。</td></tr></tbody></table></div></section>
+  </section>
+  <section class="page hidden" id="page-private" aria-labelledby="private-heading">
+    <div class="page-heading"><div><h1 id="private-heading">私聊对话</h1><p>名单里的联系人发来文字就会回复。所有私聊共用一份上下文和人格。需要在插件管理启用「私聊对话」，并打开成员记录。</p></div></div>
+    <form id="private-chat-form" class="settings-section">
+      <label for="private-contacts">联系人微信 ID（每行一个）</label>
+      <textarea id="private-contacts" rows="6" spellcheck="false" placeholder="wxid_example_friend" autocomplete="off"></textarea>
+      <div id="private-name-list" class="group-name-list" aria-label="联系人备注"></div>
+      <div class="member-pick-head">
+        <span>从已扫描的联系人加入</span>
+        <button id="private-scan" class="text-button" type="button">读取联系人</button>
+      </div>
+      <input id="private-search" type="search" placeholder="搜索备注、昵称或微信 ID" autocomplete="off" aria-label="搜索联系人">
+      <div id="private-picks" class="member-picks"></div>
+      <div class="field-pair">
+        <label for="private-hours">上下文小时数<input id="private-hours" type="number" min="1" max="168" step="1" value="6"></label>
+        <label for="private-limit">上下文最多条数<input id="private-limit" type="number" min="1" max="2000" step="1" value="300"></label>
+      </div>
+      <p class="group-name-hint">这是读取上限。真正送给模型的仍是最新的 24 条、合计不超过 2400 字。不主动开口，也不发语音。</p>
+      <label for="private-personality">私聊人格</label>
+      <select id="private-personality"></select>
+      <p class="group-name-hint">从现有人格库里选一份，所有私聊共用。</p>
+      <div class="form-footer"><span class="live-hint">保存后立即生效。收发白名单非空时，这些联系人会一并加入白名单。</span><button id="save-private-chat" class="primary" type="submit">保存私聊</button></div>
+    </form>
   </section>
   <section class="page hidden" id="page-contacts" aria-labelledby="contacts-heading">
     <div class="page-heading"><h1 id="contacts-heading">联系人 <span id="contact-count" class="count"></span></h1><button id="scan-contacts" class="primary" type="button" disabled>扫描联系人</button></div>

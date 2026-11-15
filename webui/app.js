@@ -43,12 +43,13 @@ let groupNameDraft = new Map(), discoveredGroups = [];
 let behaviorRoom = '', behaviorDraft = new Map(), behaviorDirty = false, behaviorMembers = [], memberPickGeneration = 0, membersExpanded = false, memberListRoom = '';
 let personalityItems = [], personalityDirty = false;
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
+let privateDirty=false, privateNames=new Map(), privatePickRows=[];
 const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
 const activeStates = ['starting','running','stopping'];
 const profileLabel = row => loggedAccounts.find(account=>account.wxid===row?.account)?.name || row?.account || (row?.id==='default'?'默认配置':row?.name) || '当前账号';
-const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', tasks:'定时任务', contacts:'联系人', moments:'朋友圈', articles:'公众号文章', models:'模型与语音', logs:'运行日志'};
-const pluginNames = {anti_recall_local:['本机防撤回'], anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], anti_recall_voice:['语音防撤回'], image_gallery:['图库图片'], image_generation:['AI 生图'], wechat_update_guard:['微信更新保护'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
+const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', private:'私聊对话', tasks:'定时任务', contacts:'联系人', moments:'朋友圈', articles:'公众号文章', models:'模型与语音', logs:'运行日志'};
+const pluginNames = {anti_recall_local:['本机防撤回'], anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], anti_recall_voice:['语音防撤回'], image_gallery:['图库图片'], image_generation:['AI 生图'], wechat_update_guard:['微信更新保护'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], private_chat:['私聊对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function api(path, body, identifier = robot) {
@@ -118,8 +119,8 @@ function renderState() {
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form):not(#behavior-form):not(#personality-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
-  for (const id of ['save-behavior', 'save-personalities']) $('#'+id).disabled=unavailable||!state||busy;
+  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form):not(#behavior-form):not(#personality-form):not(#private-chat-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  for (const id of ['save-behavior', 'save-personalities', 'save-private-chat']) $('#'+id).disabled=unavailable||!state||busy;
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
   renderContacts();
@@ -288,8 +289,59 @@ async function loadConfig() {
   renderModelProfiles();
   fill($('#delay-form'), config.text_send_delay);
   syncRoomBehavior();
+  renderPrivateChat();
 }
 const lines = value => [...new Set(value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean))];
+function renderPrivateChat() {
+  const saved = config?.private_chat || {};
+  const names = ['默认', ...(config?.personalities || []).map(item => item.name)];
+  const select = $('#private-personality');
+  const current = names.includes(select.value) ? select.value : '';
+  select.innerHTML = names.map(name => `<option value="${escape(name)}">${escape(name === '默认' ? '默认（不使用人格）' : name)}</option>`).join('');
+  const chosen = names.includes(saved.personality) ? saved.personality : '默认';
+  if (!privateDirty) {
+    privateNames = new Map(Object.entries(saved.names || {}));
+    $('#private-contacts').value = (saved.contacts || []).join('\n');
+    $('#private-hours').value = contextNumber(saved.context_hours, 6);
+    $('#private-limit').value = contextNumber(saved.context_limit, 300);
+    select.value = chosen;
+  } else select.value = names.includes(current) ? current : chosen;
+  renderPrivateNames();
+  paintPrivatePicks();
+}
+function renderPrivateNames() {
+  const ids = lines($('#private-contacts').value);
+  $('#private-name-list').innerHTML = ids.map(id => {
+    const name = privateNames.get(id);
+    return `<p class="group-name-row"><span>${escape(name || id)}</span><small>${escape(name ? id : '')}</small></p>`;
+  }).join('');
+}
+function paintPrivatePicks() {
+  const query = $('#private-search').value.trim().toLowerCase();
+  const selected = new Set(lines($('#private-contacts').value));
+  const rows = privatePickRows.filter(row => !query || [row.remark, row.nickname, row.wxid].some(value => String(value || '').toLowerCase().includes(query)));
+  $('#private-picks').innerHTML = rows.map(row => {
+    const label = row.remark || row.nickname || row.wxid;
+    return `<label class="inline"><input type="checkbox" data-private="${escape(row.wxid)}" ${selected.has(row.wxid) ? 'checked' : ''}>${escape(label)}</label>`;
+  }).join('');
+}
+function togglePrivateContact(wxid, on) {
+  const row = privatePickRows.find(item => item.wxid === wxid);
+  const ids = new Set(lines($('#private-contacts').value));
+  if (on) {
+    ids.add(wxid);
+    const name = String(row?.remark || row?.nickname || '').trim();
+    if (name) privateNames.set(wxid, name);
+  } else ids.delete(wxid);
+  $('#private-contacts').value = [...ids].join('\n');
+  privateDirty = true;
+  renderPrivateNames();
+}
+function readPrivateNumber(value, label) {
+  const number = Number(value);
+  if (!Number.isInteger(number)) throw new Error(label + '应为整数');
+  return number;
+}
 function discoveredName(room) {
   return discoveredGroups.find(item => item.chat_id === room)?.name || '';
 }
@@ -779,6 +831,33 @@ $('#cancel-plugin-reset').onclick=()=>{$('#plugin-reset-confirm').classList.add(
 $('#confirm-plugin-reset').onclick=()=>action(()=>submitPluginSource(true));
 $('#plugin-form').onsubmit=event=>{event.preventDefault();if(!$('#save-plugin-source').disabled)action(()=>submitPluginSource());};
 $('#groups-form').onsubmit=e=>{e.preventDefault();const groups=lines(e.target.elements.groups.value);const data={groups,history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked};if(config&&Object.hasOwn(config,'group_names'))data.group_names=Object.fromEntries(groups.map(room=>[room,groupNameDraft.get(room)||'']));action(()=>save(data));};
+$('#private-contacts').oninput=()=>{privateDirty=true;renderPrivateNames();paintPrivatePicks();};
+$('#private-hours').oninput=()=>{privateDirty=true;};
+$('#private-limit').oninput=()=>{privateDirty=true;};
+$('#private-personality').onchange=()=>{privateDirty=true;};
+$('#private-search').oninput=()=>paintPrivatePicks();
+$('#private-scan').onclick=()=>action(async()=>{
+  const data=contactData?.contacts?contactData:await api('contacts');
+  privatePickRows=data.contacts||[];
+  paintPrivatePicks();
+  if(!privatePickRows.length)toast('本地缓存中暂无好友');
+});
+$('#private-picks').onclick=event=>{
+  const box=event.target.closest('[data-private]');
+  if(!box)return;
+  togglePrivateContact(box.dataset.private, box.checked);
+};
+$('#private-chat-form').onsubmit=event=>{
+  event.preventDefault();
+  const contacts=lines($('#private-contacts').value);
+  const names=Object.fromEntries(contacts.filter(id=>privateNames.get(id)).map(id=>[id, privateNames.get(id)]));
+  action(async()=>{
+    config=await api('private-chat',{contacts,names,context_hours:readPrivateNumber($('#private-hours').value,'上下文小时数'),context_limit:readPrivateNumber($('#private-limit').value,'上下文条数'),personality:$('#private-personality').value||'默认'});
+    privateDirty=false;
+    renderPrivateChat();
+    toast('私聊配置已保存');
+  });
+};
 $('#scope-form').onsubmit=e=>{e.preventDefault();action(()=>save({chat_allowlist:lines(e.target.elements.chat_allowlist.value)}));};
 const profileKinds = ['llm', 'tts', 'decision'];
 let profileSelection = {llm:'', tts:'', decision:''}, pendingProfile = null;

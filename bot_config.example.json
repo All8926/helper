@@ -63,6 +63,9 @@
     "mention_chat": {
       "enabled": false
     },
+    "private_chat": {
+      "enabled": false
+    },
     "chat_summary": {
       "enabled": false
     },

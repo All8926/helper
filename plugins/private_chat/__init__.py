@@ -1,0 +1,128 @@
+"""名单里的联系人发来私聊文字时，用共用人格回复。不处理群聊、语音和主动开口。"""
+import threading
+import time
+from dataclasses import replace
+from datetime import datetime
+
+from wxbot_framework.chat_tools import private_chat_tools
+from wxbot_framework.dialogue import Dialogue
+from wxbot_framework.image_receiver import image_download_pending
+from wxbot_framework.llm import LLMError
+from wxbot_framework.members import BEIJING, SnapshotExpired
+from wxbot_framework.personality import personality_text
+from wxbot_framework.quoted import reference
+from wxbot_framework.room_behavior import is_slash_command
+from wxbot_framework.vision import catalog
+
+
+class Plugin:
+    def on_load(self, ctx):
+        self.members = ctx.members
+        self.images = catalog
+        self._closed = False
+        if not self.members.history_enabled:
+            raise ValueError("私聊对话需要 history_enabled: true")
+        ctx.llm  # 启动时核对配置，不请求接口。
+
+    def on_unload(self, ctx):
+        self._closed = True
+
+    def on_message(self, message, ctx):
+        if message.type == 3:
+            self._remember_image(message)
+            return
+        if not self._accepted(message):
+            return
+        native = self._pending_quote(message)
+        if native:
+            # 等下载的线程不能占住插件队列。
+            threading.Thread(target=self._answer_later, args=(message, ctx, native),
+                             name="PrivateQuotedImage", daemon=True).start()
+            return
+        self._answer(message, ctx)
+
+    def _accepted(self, message):
+        """只回复名单里的个人文字。群、自己发出的消息和斜杠指令都不进对话。"""
+        if message.is_group or str(message.chat_id).endswith("@chatroom"):
+            return False
+        if message.chat_id not in self.members.private_contacts:
+            return False
+        if (message.is_self or message.sender_id == self.members.account or
+                message.data.get("bot_generated")):
+            return False
+        if message.type == 1:
+            text = message.text.strip()
+            return bool(text) and not is_slash_command(text)
+        if message.type == 49 and message.data.get("app_type") == 57:
+            return bool(str(message.text).strip()) and not is_slash_command(message.text)
+        return False
+
+    def _pending_quote(self, message):
+        quoted = reference(message) if message.type == 49 else None
+        native = message.data.get("quoted_message_id") if quoted is not None and quoted.kind == "image" else ""
+        if native and not self.images.by_id(native) and image_download_pending(native):
+            return native
+        return ""
+
+    def _answer_later(self, message, ctx, native):
+        """引用图还在下载时，文件一到就回复，最多等 5 秒。"""
+        self.images.wait_ready(native, 5)
+        if self._closed:
+            return
+        self._answer(message, ctx)
+
+    def _answer(self, message, ctx):
+        started = time.perf_counter()
+        guard = None
+        try:
+            personality = self.members.private_personality()
+            snapshot = self.members.conversation_snapshot(message)
+            guard = lambda: ctx.response_guard(snapshot, personality)
+            self.reply_to_friend(message, ctx, snapshot, personality, guard)
+            ctx.logger.info("私聊回复耗时 | 会话=%s | %.2f秒", message.chat_id, time.perf_counter() - started)
+        except SnapshotExpired:
+            ctx.logger.info("私聊回复已取消：记录或人格已变更")
+        except (LLMError, RuntimeError) as error:
+            ctx.logger.warning("私聊回复失败：%.2f秒 | %s", time.perf_counter() - started, error)
+            if guard is None:
+                return
+            try:
+                ctx.reply(message, "暂时无法回复，请稍后再试。", delivery_guard=guard)
+            except SnapshotExpired:
+                pass
+
+    def reply_to_friend(self, message, ctx, snapshot, personality, delivery_guard):
+        """上下文已准备好，生成并发送这条私聊的纯文字回复。"""
+        tools = private_chat_tools(ctx.llm, self.members, message.chat_id)
+        snapshot = self._with_quoted_image(message, snapshot)
+        reply = Dialogue(ctx.llm_for(message, personality=personality)).reply(
+            snapshot, diary=(), memory=(), tools=tools,
+            system=self.members.global_prompt, limit=self.members.reply_limit)
+        reply = personality_text(reply, personality.name)
+        ctx.logger.info("对话正文 | 私聊=%s | %s", message.chat_id, reply)
+        if not ctx.reply(message, reply, delivery_guard=delivery_guard):
+            raise RuntimeError("私聊回复没有发出")
+        try:
+            self.members.record_bot_reply(message, reply)
+        except Exception:
+            ctx.logger.warning("私聊回复已发出，但没有写入流水")
+        return reply
+
+    def _with_quoted_image(self, message, snapshot):
+        """引用图若还没写进流水，仍补进这次上下文。"""
+        quoted = reference(message)
+        native = message.data.get("quoted_message_id") if quoted is not None and quoted.kind == "image" else ""
+        token = self.images.token_for(native) if native else ""
+        if not token or any(row.get("media_ref") == token for row in snapshot.messages):
+            return snapshot
+        extra = {"kind": "image", "media_ref": token, "text": "", "speaker": quoted.author or "对方",
+                 "received_at": datetime.now(BEIJING).isoformat(), "bot_generated": 0}
+        return replace(snapshot, messages=snapshot.messages + (extra,))
+
+    def _remember_image(self, message):
+        """下载完成后记下这张私聊图片。图片本身不触发回复。"""
+        if (message.is_group or message.chat_id not in self.members.private_contacts or message.is_self or
+                message.data.get("bot_generated") or message.data.get("image_status") != "ready"):
+            return
+        self.images.remember(message.chat_id, message.sender_id,
+                             message.data.get("native_message_id"), message.image_path)

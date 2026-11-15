@@ -14,8 +14,9 @@ from pathlib import Path
 from .account import validate_account
 from .config import validate_name
 from .memory import DIARY_DAYS, SOURCE_CHARS, SOURCE_LINE_CHARS, SOURCE_LINES
-from .room_behavior import (BehaviorError, RESERVED_PERSONALITY, alias_mentioned as name_mentioned,
-                            normalize_personalities, normalize_room_setting, public_personalities,
+from .room_behavior import (BehaviorError, PRIVATE_PERSONALITY_ROOM, RESERVED_PERSONALITY,
+                            alias_mentioned as name_mentioned, normalize_personalities,
+                            normalize_private_chat, normalize_room_setting, public_personalities,
                             normalize_global_prompt, normalize_reply_limit, write_json)
 from .text import validate_mentions
 
@@ -170,6 +171,11 @@ class MemberStore:
                 self.room_settings[room] = normalize_room_setting(value, names)
             except (BehaviorError, ValueError) as error:
                 raise MemberError(str(error)) from error
+        try:
+            self.private_chat = normalize_private_chat(options.get("private_chat"), names, fallback=True)
+        except BehaviorError as error:
+            raise MemberError(str(error)) from error
+        self.private_contacts = set(self.private_chat["contacts"])
 
     @classmethod
     def from_config(cls, config, directory):
@@ -295,14 +301,16 @@ class MemberStore:
             if day == self._active_day:
                 return False
             with self._connection() as db:
-                for room in self.groups:
+                rooms = list(self.groups) + [room for room in self.private_contacts if room not in self.groups]
+                for room in rooms:
                     db.execute("""INSERT INTO chat_buffers(account,room,local_day) VALUES(?,?,?)
                         ON CONFLICT(account,room) DO UPDATE SET local_day=excluded.local_day,
                         generation=chat_buffers.generation+1 WHERE chat_buffers.local_day<>excluded.local_day""",
                                (self.account, room, day))
                     if self.daily_clear:
-                        # 先留下可压缩的材料，再删原文。日记写好之前，回复不会读这段原文。
-                        self._stash_digest_source(db, room, start)
+                        # 群聊先留下可压缩的材料。私聊只删过期原文，不写群日记。
+                        if room in self.groups:
+                            self._stash_digest_source(db, room, start)
                         db.execute("DELETE FROM messages WHERE account=? AND room=? AND received_at<?",
                                    (self.account, room, start))
             self._active_day = day
@@ -574,6 +582,10 @@ class MemberStore:
                     setting = self.room_settings.get(room)
                     if setting is not None:
                         setting["personality"] = RESERVED_PERSONALITY
+            chosen = self.private_chat["personality"]
+            if chosen not in new_names and chosen != RESERVED_PERSONALITY:
+                self.private_chat = {**self.private_chat, "personality": RESERVED_PERSONALITY}
+                self._sync_private_personality(RESERVED_PERSONALITY)
             self.personalities = public_personalities(items)
             self._persist_behavior()
 
@@ -613,6 +625,8 @@ class MemberStore:
         for setting in self.room_settings.values():
             if setting.get("personality") == source:
                 setting["personality"] = target
+        if self.private_chat.get("personality") == source:
+            self.private_chat = {**self.private_chat, "personality": target}
 
     def _bump_personality(self, name):
         with self._connection() as db:
@@ -637,7 +651,52 @@ class MemberStore:
             raw["global_prompt"] = self.global_prompt
             raw["reply_limit"] = self.reply_limit
             raw["room_settings"] = self.room_settings
+            raw["private_chat"] = self.private_chat
         self._mutate_config(mutate)
+
+    def _persist_private_chat(self):
+        self._mutate_config(lambda raw: raw.__setitem__("private_chat", self.private_chat))
+
+    def apply_private_chat(self, data):
+        """保存私聊名单和共用的上下文、人格，并立刻作用于当前进程。"""
+        cleaned = normalize_private_chat(data, self.personality_names())
+        if self.account in cleaned["contacts"]:
+            raise MemberError("不能把机器人自己加入私聊名单")
+        with self._lock:
+            previous = self.private_chat
+            self.private_chat = cleaned
+            self.private_contacts = set(cleaned["contacts"])
+            try:
+                self._persist_private_chat()
+            except Exception:
+                self.private_chat = previous
+                self.private_contacts = set(previous["contacts"])
+                raise
+            self._sync_private_personality(cleaned["personality"])
+        return dict(cleaned)
+
+    def private_context_window(self):
+        """全部私聊共用的读取小时数和条数。"""
+        chat = self.private_chat
+        return chat["context_hours"], chat["context_limit"]
+
+    def private_personality(self):
+        """私聊共用的人格。配置和库里的名字不一致时，以配置为准并刷新代际。"""
+        name = self.private_chat["personality"]
+        with self._lock:
+            current = self.personality(PRIVATE_PERSONALITY_ROOM)
+            if current.name != name:
+                return self._sync_private_personality(name)
+            return current
+
+    def _sync_private_personality(self, name):
+        """写入私聊共用人格。名字变了才增加代际，用来取消还没发出的旧回复。"""
+        with self._lock, self._connection() as db:
+            db.execute("""INSERT INTO room_personalities VALUES(?,?,?,1)
+                ON CONFLICT(account,room) DO UPDATE SET name=excluded.name,
+                generation=room_personalities.generation+1 WHERE room_personalities.name<>excluded.name""",
+                       (self.account, PRIVATE_PERSONALITY_ROOM, name))
+        return self.personality(PRIVATE_PERSONALITY_ROOM)
 
     def _mutate_config(self, mutate):
         raw = json.loads(self.config_file.read_text(encoding="utf-8-sig"))
@@ -825,24 +884,42 @@ class MemberStore:
                 return True
         return False
 
+    def _other_label(self, room):
+        """私聊里的对方没有群昵称时，不用「群友」这个称呼。"""
+        return "对方" if room in self.private_contacts else "群友"
+
+    def _keeps_history(self, room):
+        return room in self.groups or room in self.private_contacts
+
+    def _can_record(self, message):
+        """群流水只收已接入的群；私聊流水只收名单里的个人会话。"""
+        chat = message.chat_id
+        if message.is_group or str(chat).endswith("@chatroom"):
+            return chat in self.groups
+        return chat in self.private_contacts
+
     def _context_speaker(self, room, sender_id, bot_generated):
         """流水里标出发言人。机器人自己的回复用本群别名，没有别名就标成机器人。"""
         if bot_generated or sender_id == self.account:
             aliases = (self.room_settings.get(room) or {}).get("aliases") or ()
             return aliases[0] if aliases else "机器人"
-        return self.display_name(sender_id, room) or "群友"
+        return self.display_name(sender_id, room) or self._other_label(room)
 
     def conversation_snapshot(self, message):
-        """本群最近一段时间内、当前消息之前的文字。后来的消息不带入。"""
+        """当前会话最近一段时间内、这条消息之前的文字。后来的消息不带入。"""
         from .summary import CONTROL
-        if message.chat_id not in self.groups:
+        private = self._can_record(message) and message.chat_id not in self.groups
+        if message.chat_id not in self.groups and not private:
             raise MemberError("这个群尚未启用聊天记录")
         with self._lock:
             self.rollover()
             day, _, _ = self._day_bounds()
-            hours, limit = self.context_window(message.chat_id)
+            hours, limit = self.private_context_window() if private else self.context_window(message.chat_id)
             since = (self._now() - timedelta(hours=hours)).astimezone(timezone.utc).isoformat()
             db = self._connection()
+            # 当天已经滚过一次后新加的会话，这里补上缓冲行。
+            db.execute("""INSERT INTO chat_buffers(account,room,local_day) VALUES(?,?,?)
+                ON CONFLICT(account,room) DO NOTHING""", (self.account, message.chat_id, day))
             current = db.execute("""SELECT id FROM messages WHERE account=? AND room=? AND sender_id=?
                 AND session_id=? AND sequence=? AND text=? AND received_at>=?
                 ORDER BY id DESC LIMIT 1""", (self.account, message.chat_id, message.sender_id,
@@ -868,8 +945,8 @@ class MemberStore:
             member = self.find_by_wxid(message.sender_id, message.chat_id)
             state = db.execute("SELECT generation FROM chat_buffers WHERE account=? AND room=?",
                                (self.account, message.chat_id)).fetchone()
-            return ConversationSnapshot(message.chat_id, day, state[0], member.name if member else
-                                        self.display_name(message.sender_id, message.chat_id) or "群友",
+            speaker = member.name if member else self.display_name(message.sender_id, message.chat_id)
+            return ConversationSnapshot(message.chat_id, day, state[0], speaker or self._other_label(message.chat_id),
                                         tuple(reversed(previous)), message.text)
 
     @contextmanager
@@ -1007,7 +1084,7 @@ class MemberStore:
         from .text import own_group_command
 
         keyword = " ".join(str(keyword or "").split())[:50]
-        if not keyword or not self.history_enabled or room not in self.groups:
+        if not keyword or not self.history_enabled or not self._keeps_history(room):
             return []
         cutoff = (self._now() - timedelta(days=min(max(int(days), 1), 30))).astimezone(timezone.utc).isoformat()
         pattern = "%" + keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -1107,12 +1184,12 @@ class MemberStore:
             return self._member(self._row(name, room))
 
     def record_bot_reply(self, message, text):
-        """把机器人刚发出的回复写进群流水，下次上下文才能看见自己说过的话。"""
+        """把机器人刚发出的回复写进当前会话流水，下次上下文才能看见自己说过的话。"""
         if not isinstance(text, str) or not text.strip():
             return False
-        reply = type(message)(text.strip(), message.chat_id, sender_id=self.account, is_group=True,
-                              is_self=True, session_id=message.session_id, sequence=0,
-                              data={"bot_generated": True})
+        reply = type(message)(text.strip(), message.chat_id, sender_id=self.account,
+                              is_group=bool(message.is_group), is_self=True, session_id=message.session_id,
+                              sequence=0, data={"bot_generated": True})
         return self.record(reply)
 
     def _visible_image_ref(self, row):
@@ -1122,16 +1199,20 @@ class MemberStore:
         return token if token and catalog.path(token) else ""
 
     def record(self, message):
-        # 引用回复的新正文也是群聊文字，一并记下，上下文才连得上。图片只记类型和编号。
+        # 引用回复的新正文也记下，上下文才连得上。图片只记类型和编号。
         quote = message.type == 49 and message.data.get("app_type") == 57 and bool(str(message.text).strip())
         image = message.type == 3
-        if not self.history_enabled or (message.type != 1 and not quote and not image) or not message.is_group or message.chat_id not in self.groups:
+        if not self.history_enabled or (message.type != 1 and not quote and not image) or not self._can_record(message):
             return False
         if message.data.get("self_wxid", self.account) != self.account:
             return False
-        validate_mentions(message.chat_id, [message.sender_id])
+        if message.is_group or str(message.chat_id).endswith("@chatroom"):
+            validate_mentions(message.chat_id, [message.sender_id])
+        else:
+            validate_account(message.chat_id)
+            validate_account(message.sender_id)
         if not isinstance(message.text, str) or not message.session_id:
-            raise MemberError("群记录缺少正文或连接标识")
+            raise MemberError("聊天记录缺少正文或连接标识")
         native_name = message.data.get("sender_wechat_name")
         if native_name:
             self.remember_wechat_name(message.sender_id, native_name)
@@ -1152,7 +1233,15 @@ class MemberStore:
                 (self.account, message.chat_id, message.sender_id, text,
                  self._now().astimezone(timezone.utc).isoformat(), message.session_id, message.sequence,
                  int(message.is_self), int(bool(message.data.get("bot_generated"))), kind, ref))
-            return result.rowcount > 0
+            if result.rowcount > 0:
+                return True
+            # 同一条图片先以空编号入库时，下载完成后再补上编号。
+            if not ref:
+                return False
+            updated = db.execute("""UPDATE messages SET kind='image', media_ref=?
+                WHERE account=? AND session_id=? AND sequence=? AND sequence>0 AND media_ref=''""",
+                (ref, self.account, message.session_id, message.sequence))
+            return updated.rowcount > 0
 
     def history(self, name, room=None, *, limit=100, since=None):
         if type(limit) is not int or not 1 <= limit <= 1000:

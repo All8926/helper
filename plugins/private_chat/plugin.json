@@ -1,0 +1,16 @@
+{
+  "api": "v1",
+  "description": "名单里的联系人发来私聊文字时，按共用人格回复。不处理群聊，也不主动开口或发送语音。",
+  "default_enabled": false,
+  "requires": [
+    "friend.text.receive",
+    "friend.text.send"
+  ],
+  "message_types": [1, 3, 49],
+  "business": [
+    {
+      "function": "Plugin.reply_to_friend",
+      "label": "生成并发送私聊回复"
+    }
+  ]
+}

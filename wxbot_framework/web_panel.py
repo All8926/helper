@@ -474,6 +474,45 @@ class PanelController:
             raise PanelError(str(error)) from None
         return self.configuration()
 
+    def save_private_chat(self, data):
+        """私聊名单和共用上下文在机器人运行时也可以保存，并立刻生效。"""
+        if not isinstance(data, dict):
+            raise PanelError('配置格式不正确')
+        with self.lock:
+            if self.state == 'stopping' or self.stop_event.is_set():
+                raise PanelError('机器人正在停止，请稍后重试', 409)
+        store, owned = self._open_members()
+        if store is None:
+            raise PanelError('请先设置微信账号和成员配置')
+        try:
+            try:
+                cleaned = store.apply_private_chat(data)
+            except (BehaviorError, MemberError, ValueError) as error:
+                raise PanelError(str(error)) from None
+        finally:
+            if owned:
+                store.close()
+        self._allow_private_contacts(cleaned['contacts'])
+        return self.configuration()
+
+    def _allow_private_contacts(self, contacts):
+        """白名单非空时，把私聊联系人补进去，否则这些会话到不了插件。"""
+        if not contacts:
+            return
+        with self.lock:
+            config = self.store.load()
+            allowed = config.get('chat_allowlist') or []
+            if not isinstance(allowed, list) or not allowed:
+                return
+            merged = list(dict.fromkeys([*allowed, *contacts]))
+            if merged == list(allowed):
+                return
+            config['chat_allowlist'] = merged
+            atomic_json(self.store.path, config)
+            app = self.app
+            if app is not None and isinstance(getattr(app, 'config', None), dict):
+                app.config['chat_allowlist'] = merged
+
     def _open_members(self):
         """机器人在跑时用它自己的成员目录。没启动时临时打开同一份库。"""
         with self.lock:

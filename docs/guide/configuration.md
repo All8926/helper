@@ -234,7 +234,7 @@
 
 旧配置无需补齐新增字段，缺省值与上表一致。
 
-模板默认关闭 `idiom_chain`、`chat_summary`、`mention_chat`。填写有效模型配置后，开启需要的插件，再执行 `--check`。
+模板默认关闭 `idiom_chain`、`chat_summary`、`mention_chat`、`private_chat`。填写有效模型配置后，开启需要的插件，再执行 `--check`。
 
 修改模型配置后重载对应插件或重启。聊天总结、艾特对话会将对应文本交给你配置的模型服务；记录范围见[群聊功能](./features.md)。
 

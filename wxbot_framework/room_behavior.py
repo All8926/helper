@@ -27,6 +27,9 @@ ALIAS_TEXT = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_-]{2,16}$")
 PERSONALITY_NAME = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9_-]{1,16}$")
 DEFAULT_REPLY_LIMIT = 600
 MAX_REPLY_LIMIT = 8000
+# 所有私聊共用这一行人格代际，不能当成群 ID。
+PRIVATE_PERSONALITY_ROOM = "__private__"
+MAX_PRIVATE_CONTACTS = 1000
 
 
 class BehaviorError(ValueError):
@@ -313,6 +316,54 @@ def normalize_room_setting(value, names):
             "plugin_options": normalize_plugin_options(value.get("plugin_options"))}
 
 
+def normalize_private_chat(value, personality_names, *, fallback=False):
+    """私聊名单和共用的上下文、人格。缺省是空名单、6 小时、300 条、默认人格。"""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise BehaviorError("私聊配置格式不正确")
+    raw_contacts = value.get("contacts", [])
+    if not isinstance(raw_contacts, list) or len(raw_contacts) > MAX_PRIVATE_CONTACTS:
+        raise BehaviorError("私聊联系人应为列表，最多 1000 个")
+    contacts, seen = [], set()
+    for item in raw_contacts:
+        if not isinstance(item, str):
+            raise BehaviorError("私聊联系人应为微信 ID")
+        try:
+            wxid = validate_account(item.strip())
+        except ValueError as error:
+            raise BehaviorError("私聊联系人必须是个人微信 ID") from error
+        if wxid not in seen:
+            seen.add(wxid)
+            contacts.append(wxid)
+    raw_names = value.get("names", {})
+    if raw_names is None:
+        raw_names = {}
+    if not isinstance(raw_names, dict):
+        raise BehaviorError("联系人备注格式不正确")
+    names = {}
+    for wxid, title in raw_names.items():
+        if wxid not in seen:
+            continue
+        if not isinstance(title, str) or len(title) > 64 or any(ord(ch) < 32 for ch in title):
+            raise BehaviorError("联系人备注不超过 64 个字符")
+        title = title.strip()
+        if title:
+            names[wxid] = title
+    personality = value.get("personality", RESERVED_PERSONALITY)
+    if not isinstance(personality, str):
+        raise BehaviorError("请选择已保存的人格")
+    personality = personality.strip()
+    if personality != RESERVED_PERSONALITY and personality not in personality_names:
+        if not fallback:
+            raise BehaviorError("请选择已保存的人格")
+        personality = RESERVED_PERSONALITY
+    return {"contacts": contacts, "names": names,
+            "context_hours": normalize_context_hours(value.get("context_hours")),
+            "context_limit": normalize_context_limit(value.get("context_limit")),
+            "personality": personality}
+
+
 def view_behavior(options):
     """给管理台的人格库和各群行为。配置缺失时补上内置人格。"""
     if not isinstance(options, dict):
@@ -330,10 +381,16 @@ def view_behavior(options):
         limit = normalize_reply_limit(options.get("reply_limit"))
     except (BehaviorError, TypeError):
         limit = DEFAULT_REPLY_LIMIT
+    known = [item["name"] for item in items]
+    try:
+        private_chat = normalize_private_chat(options.get("private_chat"), known, fallback=True)
+    except (BehaviorError, TypeError, ValueError):
+        private_chat = normalize_private_chat(None, known)
     return {"personalities": public_personalities(items),
             "global_prompt": guard,
             "reply_limit": limit,
-            "room_settings": settings if isinstance(settings, dict) else {}}
+            "room_settings": settings if isinstance(settings, dict) else {},
+            "private_chat": private_chat}
 
 
 def command_allowed(admins, sender, robot):
