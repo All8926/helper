@@ -139,7 +139,7 @@
               <label for="behavior-hourly">每小时最多主动说几句<input id="behavior-hourly" type="number" min="0" max="30" step="1" value="3"></label>
               <label for="behavior-speak">说话门槛（0–1）<input id="behavior-speak" type="number" min="0" max="1" step="0.05" value="0.5"></label>
             </div>
-            <p class="group-name-hint">关闭时只在被艾特、叫别名或引用它的话时回复。开启后有两种时机：机器人说完话 3 分钟内有人发言，等群里安静几秒再判断；平时每隔「看群间隔」看一眼，有新发言就判断，0 表示不按间隔看。决策模型给出的概率达到「说话门槛」才说，默认 0.5，越高越少开口。该说就直接发到群里，不引用、不艾特。「每小时最多主动说几句」只限制按间隔看群时说的话。</p>
+            <p class="group-name-hint">关闭时只在被艾特、叫别名或引用它的话时回复。开启后，有人说完并安静约 6 秒就判断要不要接一句；另外每隔「看群间隔」再看一眼，0 表示不按间隔看。决策模型给出的概率达到「说话门槛」才说，默认 0.5，越高越少开口。该说就直接发到群里，不引用、不艾特。「每小时最多主动说几句」限制这些没被点名时说出去的话，点名回复不占这个数。</p>
             <div class="field-pair three">
               <label for="behavior-voice">语音回复<select id="behavior-voice"><option value="off">关闭（文字）</option><option value="always">始终语音</option><option value="auto">自动</option></select></label>
               <label for="behavior-voice-threshold">语音门槛（0–1）<input id="behavior-voice-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>

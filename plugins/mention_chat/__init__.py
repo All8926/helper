@@ -1,5 +1,5 @@
 """真正艾特机器人、叫到本群别名，或引用机器人的话时，用本群人格回复。
-本群开了未点名回应时，没被点名也可能说话：机器人说完 3 分钟内有人发言，或者到了看群间隔，
+本群开了未点名回应时，没被点名也可能说话：有人说完并安静几秒，或者到了看群间隔，
 先问决策模型现在该不该说，该说再由对话模型写一句，直接发到群里。"""
 import threading
 import time
@@ -30,7 +30,7 @@ from wxbot_framework.text import own_group_command
 from wxbot_framework.vision import catalog
 
 WATCH_SECONDS = 2
-_TRIGGER = {"hot": "对话还热", "beat": "看群"}
+_TRIGGER = {"hot": "有人刚说完", "beat": "看群"}
 
 
 class Plugin:
@@ -259,7 +259,7 @@ class Plugin:
                         user_text, " ".join(reply.split())[:200], snapshot.generation)
 
     def _watch_loop(self, ctx):
-        """定时检查各群：对话还热时等安静下来再判断，平时按看群间隔看一眼。"""
+        """定时检查各群：有人说完就等安静再判断，平时也按看群间隔看一眼。"""
         while not self._watch_stop.wait(WATCH_SECONDS):
             try:
                 self._watch_once(ctx)
@@ -295,7 +295,10 @@ class Plugin:
         started = time.perf_counter()
         hours, _ = self.members.context_window(room)
         chosen = working_messages(self.members.recent_room_lines(room, hours * 3600, 80))
-        transcript = [{**transcript_line(row, current=False), "bot": pro.is_bot(row, bot)} for row in chosen]
+        # 只把最新一条人话标成 current，决策模型才知道现在该接哪一句。
+        last_human = next((row for row in reversed(chosen) if not pro.is_bot(row, bot)), None)
+        transcript = [{**transcript_line(row, current=row is last_human), "bot": pro.is_bot(row, bot)}
+                      for row in chosen]
         label = _TRIGGER.get(trigger, trigger)
         state = {"trigger": label, "transcript": transcript[-20:]}
         if not Decider(ctx.llm.decision, logger=ctx.logger).yes(
@@ -328,7 +331,7 @@ class Plugin:
         except RuntimeError as error:
             ctx.logger.warning("未点名回应没有发出 | 群=%s | %s", room, error)
             return
-        self.listener.bot_spoke(room, beat=trigger == "beat", now=now)
+        self.listener.bot_spoke(room, beat=True, now=now)
         try:
             self.members.record_bot_reply(anchor, reply)
         except Exception:

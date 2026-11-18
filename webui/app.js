@@ -1263,8 +1263,37 @@ async function pollMessages(requested,generation) {
 function renderLogs(){
   const level=$('#log-level').value;const allowed=level==='WARNING'?['WARNING','ERROR','CRITICAL']:['ERROR','CRITICAL'];
   const rows=logs.filter(r=>level==='ALL'||allowed.includes(r.level));const view=$('#log-list');const previousTop=view.scrollTop;
-  view.innerHTML=rows.map(r=>`<div class="log-row" data-level="${escape(r.level)}"><span class="log-time">${escape(r.time)}</span><span class="log-level">${escape(r.level)}</span><span class="log-message">[${escape(r.logger)}] ${escape(r.message)}</span></div>`).join('')||'<div class="log-empty">暂无符合条件的日志。</div>';
+  view.innerHTML=rows.map(r=>`<div class="log-row" data-level="${escape(r.level)}"><span class="log-time">${escape(r.time)}</span><span class="log-level">${escape(r.level)}</span><span class="log-message">[${escape(r.logger)}] ${escape(r.message)}</span><button type="button" class="log-copy" aria-label="复制这条日志" title="复制"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>`).join('')||'<div class="log-empty">暂无符合条件的日志。</div>';
   $('#log-count').textContent=rows.length+' 条';view.scrollTop=paused?previousTop:view.scrollHeight;
+}
+$('#log-list').addEventListener('click', async event => {
+  const button = event.target.closest('.log-copy');
+  if (!button) return;
+  const row = button.closest('.log-row');
+  const text = ['.log-time', '.log-level', '.log-message'].map(selector => row.querySelector(selector).textContent).join(' ');
+  try {
+    await copyText(text);
+    toast('已复制这条日志');
+  } catch {
+    toast('复制失败，请手动选择文本', true);
+  }
+});
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {}
+  // 剪贴板接口不可用时，用临时文本框复制。
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.left = '-9999px';
+  document.body.appendChild(area);
+  area.select();
+  const copied = document.execCommand('copy');
+  area.remove();
+  if (!copied) throw new Error('复制失败');
 }
 $('#pause-logs').onclick=()=>{paused=!paused;$('#pause-logs').textContent=paused?'继续滚动':'暂停滚动';};
 $('#scroll-logs').onclick=()=>{$('#log-list').scrollTop=$('#log-list').scrollHeight;};

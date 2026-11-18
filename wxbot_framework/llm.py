@@ -330,6 +330,13 @@ def _run_tool(tools, call):
         text = str(tool.run(args))
     except (LLMError, ValueError) as error:
         text = f"工具出错：{error}"
+    except RuntimeError as error:
+        # 停机时成员目录已关，模型这边的查询还没结束。这是预期情况，不必打堆栈。
+        if str(error) == "成员目录已关闭":
+            text = "成员目录已关闭，这次查不了"
+        else:
+            log.exception("工具 | %s | 执行出错", name)
+            text = "工具出错"
     except Exception:
         log.exception("工具 | %s | 执行出错", name)
         text = "工具出错"

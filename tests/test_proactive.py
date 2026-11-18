@@ -1,4 +1,4 @@
-"""未点名回应：对话还热时等安静再判断，平时按看群间隔看一眼；该不该说由决策模型定，说什么由对话模型写。"""
+"""未点名回应：有人说完等安静再判断，平时按看群间隔看一眼；该不该说由决策模型定，说什么由对话模型写。"""
 import io
 import json
 import threading
@@ -65,20 +65,20 @@ class FilterTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(BehaviorError):
                 normalize_room_setting(bad, [])
 
-    def test_hot_window_waits_for_quiet_and_mentions_cancel_it(self):
+    def test_human_line_waits_for_quiet_and_mentions_cancel_it(self):
         listener = pro.RoomListener()
         listener.heard(ROOM, now=0)
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=1, quiet=True, now=5))
+        self.assertEqual(listener.take(ROOM, minutes=0, limit=3, last_id=1, quiet=True, now=6), "hot")
         self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=1, quiet=True, now=10))
-        listener.bot_spoke(ROOM, now=100)
-        listener.heard(ROOM, now=150)
-        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=2, quiet=False, now=153))
-        self.assertEqual(listener.take(ROOM, minutes=0, limit=0, last_id=2, quiet=False, now=157), "hot")
-        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=2, quiet=True, now=160))
-        listener.heard(ROOM, now=200)
+        listener.heard(ROOM, now=20)
         listener.addressed(ROOM)
-        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=3, quiet=True, now=210))
-        listener.heard(ROOM, now=100 + pro.HOT_SECONDS + 1)
-        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=4, quiet=True, now=400))
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=2, quiet=True, now=30))
+        listener.bot_spoke(ROOM, beat=True, now=40)
+        listener.bot_spoke(ROOM, beat=True, now=41)
+        listener.bot_spoke(ROOM, beat=True, now=42)
+        listener.heard(ROOM, now=50)
+        self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=3, quiet=True, now=56))
 
     def test_beat_needs_interval_new_quiet_lines_and_room_in_the_hourly_limit(self):
         listener = pro.RoomListener()
@@ -288,8 +288,13 @@ class PluginTests(unittest.TestCase):
         with patch("wxbot_framework.llm.urlopen", return_value=answer) as call:
             self.plugin._watch_once(now=self.later())
         state = json.loads(call.call_args.args[0].data)["state"]
-        self.assertEqual(state["trigger"], "对话还热")
+        self.assertEqual(state["trigger"], "有人刚说完")
         self.assertEqual(state["transcript"][-1]["text"], "那明天吃啥")
+        self.assertTrue(state["transcript"][-1]["current"])
+        self.assertFalse(any(row["current"] for row in state["transcript"][:-1]))
+        body = json.loads(call.call_args.args[0].data)
+        self.assertEqual(body["questions"]["speak"]["instructions"], pro.SPEAK_QUESTION)
+        self.assertEqual(body["questions"]["speak"]["criteria"]["true"], pro.SPEAK_CRITERIA[0])
         self.assertEqual(self.spoken, [])
 
     def test_beat_runs_on_its_interval_and_respects_the_hourly_limit(self):

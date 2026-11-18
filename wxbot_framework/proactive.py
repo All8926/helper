@@ -1,21 +1,20 @@
-"""未点名回应：没人点名时，机器人什么时候问决策模型“现在该不该说话”。
+"""未点名回应：没人点名时，机器人什么时候问决策模型“现在会不会自然接一句”。
 
-两种时机：机器人说完话 3 分钟内有人发言（对话还热），等群里安静几秒再判断；
-平时按本群的看群间隔看一眼，有新的人类发言、这一小时节拍发言没到上限时判断。"""
+有人说完，等群里安静几秒再判断。平时也按看群间隔看一眼。
+两种时机说出去的话，都算进本群每小时上限。点名回复不算。"""
 from __future__ import annotations
 
 import json
 import threading
 import time
 
-HOT_SECONDS = 180
 QUIET_SECONDS = 6
 HOUR = 3600
 
-SPEAK_QUESTION = "群聊机器人现在要不要在群里说一句话？"
+SPEAK_QUESTION = "机器人已经是这个群里的一员。看着标成 current 的最新一条，现在会不会自然接一句？"
 SPEAK_CRITERIA = (
-    "有人在接着跟机器人说话、追问或回应机器人刚才的话；或者有人在提问求助、话题里机器人能补上一句真有用或有意思的话，而且还没人答好",
-    "大家在彼此聊天、闲聊斗图、话题和机器人无关、已经有人回答了，或者此时开口会显得多余、打扰",
+    "最新一条是抛给大家的：观点、玩笑、吐槽、经历、问句，或在接别人刚才的话。群还敞着，这时接一句就像群里的人",
+    "最新一条只是嗯、哈哈、纯表情或斗图，没有可接的内容；或者两个人明显在说只有他们之间的事；或者机器人上一条还挂着、没人接；或者再开口就是重复、抢话",
 )
 
 
@@ -34,8 +33,8 @@ def unnamed_input(day, transcript, diary, people):
 
 
 class RoomListener:
-    """每个群记：机器人上次说话的时间、上次看群看到的最后一条人类发言、
-    最近一小时节拍触发说出去的时间点、对话还热时的防抖截止时间。"""
+    """每个群记：机器人上次说话的时间、上次看过的人类发言、
+    最近一小时主动说出去的时间点，以及等人说完再判断的截止时间。"""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -45,7 +44,7 @@ class RoomListener:
         return self._rooms.setdefault(room, {"spoke": None, "seen": None, "glanced": None, "beats": [], "due": None})
 
     def bot_spoke(self, room, *, beat=False, now=None):
-        """机器人说了一句。“对话还热”的窗口从这时重新计。"""
+        """机器人说了一句。beat 为真时，这句算进每小时主动说话上限。"""
         moment = time.monotonic() if now is None else now
         with self._lock:
             state = self._state(room)
@@ -59,12 +58,10 @@ class RoomListener:
             self._state(room)["due"] = None
 
     def heard(self, room, now=None):
-        """群里有人说了一句。对话还热时排一次判断，等安静几秒再看。"""
+        """群里有人说了一句。等安静几秒再判断要不要接，不限机器人是不是刚说过话。"""
         moment = time.monotonic() if now is None else now
         with self._lock:
-            state = self._state(room)
-            if state["spoke"] is not None and moment - state["spoke"] <= HOT_SECONDS:
-                state["due"] = moment + QUIET_SECONDS
+            self._state(room)["due"] = moment + QUIET_SECONDS
 
     def take(self, room, *, minutes, limit, last_id, quiet, now=None):
         """该判断时返回 "hot" 或 "beat"，否则返回 None。
@@ -79,6 +76,9 @@ class RoomListener:
                     return None
                 state["due"] = None
                 state["seen"] = last_id
+                # 安静后再接。这一小时主动说过的话已经到上限时，这次也不接。
+                if len(state["beats"]) >= limit:
+                    return None
                 return "hot"
             if minutes <= 0 or len(state["beats"]) >= limit:
                 return None

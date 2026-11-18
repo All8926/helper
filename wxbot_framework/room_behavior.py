@@ -224,7 +224,7 @@ def normalize_sing_threshold(value):
 
 
 def normalize_glance_minutes(value):
-    """未点名回应隔几分钟看一眼群。没填时 2 分钟，0 表示不按节拍看，只在对话还热时回应。"""
+    """未点名回应隔几分钟看一眼群。没填时 2 分钟，0 表示不按节拍看，只在有人说完并安静下来时判断。"""
     if value is None:
         return DEFAULT_GLANCE_MINUTES
     if type(value) is not int or not 0 <= value <= MAX_GLANCE_MINUTES:

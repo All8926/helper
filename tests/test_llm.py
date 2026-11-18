@@ -399,6 +399,18 @@ class LLMTests(unittest.TestCase):
         results = [item["content"] for item in messages if item["role"] == "tool"]
         self.assertEqual(results, ["工具出错：搜索服务挂了", "没有这个工具", "工具参数应为 JSON 对象"])
 
+    def test_closed_member_directory_is_a_normal_tool_result(self):
+        def closed(args):
+            raise RuntimeError("成员目录已关闭")
+
+        tool = Tool("search_history", "查历史", {"type": "object", "properties": {}}, closed)
+        bodies = [self._raw(self._calling("search_history", "{}")), self.response("先说到这")]
+        with patch("wxbot_framework.llm.urlopen", side_effect=bodies) as call, self.assertNoLogs("LLM", level="ERROR"):
+            self.assertEqual(self.client.chat("规则", "问题", [tool]), "先说到这")
+        messages = json.loads(call.call_args_list[-1].args[0].data)["messages"]
+        results = [item["content"] for item in messages if item["role"] == "tool"]
+        self.assertEqual(results, ["成员目录已关闭，这次查不了"])
+
     def test_tool_rounds_are_bounded(self):
         tool = Tool("echo", "回声", {"type": "object", "properties": {}}, lambda args: "x")
         bodies = [self._raw(self._calling("echo", "{}", f"call_{index}")) for index in range(MAX_TOOL_ROUNDS)]

@@ -427,7 +427,10 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
 .log-actions button { min-height: 34px; font-size: 12px; }
 .log-actions .icon-button { width: 34px; height: 34px; border: 1px solid var(--rule); }
 .log-list { height: 60vh; min-height: 340px; overflow: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 0 0 12px 12px; padding: var(--space-2) var(--space-5); font-family: var(--font-data); font-size: 12px; }
-.log-row { display: grid; grid-template-columns: 64px 60px minmax(0, 1fr); gap: var(--space-3); padding: 10px 0; border-bottom: 1px solid var(--log-rule); line-height: 1.8; }
+.log-row { display: grid; grid-template-columns: 64px 60px minmax(0, 1fr) 28px; gap: var(--space-3); align-items: start; padding: 10px 0; border-bottom: 1px solid var(--log-rule); line-height: 1.8; }
+.log-copy { grid-column: 4; grid-row: 1; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-top: 1px; padding: 0; color: var(--muted); background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-control); }
+.log-copy:hover { color: var(--ink); background: var(--icon-hover); }
+.log-copy svg { width: 14px; height: 14px; }
 .log-time { color: var(--quiet); font-variant-numeric: tabular-nums; }
 .log-level { font-size: 11px; color: var(--log-info); }
 .log-row[data-level="ERROR"] .log-level, .log-row[data-level="CRITICAL"] .log-level { color: var(--danger); }
@@ -559,8 +562,9 @@ dialog .note { margin-top: var(--space-3); }
   .log-toolbar select { min-height: 36px; }
   .log-actions { margin-left: auto; }
   .log-list { padding: var(--space-2) var(--space-3); }
-  .log-row { grid-template-columns: 64px 1fr; gap: var(--space-1) var(--space-2); }
-  .log-message { grid-column: 1 / -1; }
+  .log-row { grid-template-columns: 64px minmax(0, 1fr) 36px; gap: var(--space-1) var(--space-2); }
+  .log-message { grid-column: 1 / -1; grid-row: 2; }
+  .log-copy { grid-column: 3; grid-row: 1; width: 36px; height: 36px; }
   .toast { bottom: var(--space-4); font-size: 12px; width: max-content; }
   dialog { padding: var(--space-5); }
 }
