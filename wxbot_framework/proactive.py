@@ -10,6 +10,7 @@ import time
 
 QUIET_SECONDS = 6
 HOUR = 3600
+RETRY_SECONDS = 180
 
 SPEAK_QUESTION = "机器人已经是这个群里的一员。看着标成 current 的最新一条，现在会不会自然接一句？"
 SPEAK_CRITERIA = (
@@ -41,7 +42,8 @@ class RoomListener:
         self._rooms = {}
 
     def _state(self, room):
-        return self._rooms.setdefault(room, {"spoke": None, "seen": None, "glanced": None, "beats": [], "due": None})
+        return self._rooms.setdefault(room, {"spoke": None, "seen": None, "glanced": None, "beats": [],
+                                             "due": None, "retry_after": None})
 
     def bot_spoke(self, room, *, beat=False, now=None):
         """机器人说了一句。beat 为真时，这句算进每小时主动说话上限。"""
@@ -57,6 +59,14 @@ class RoomListener:
         with self._lock:
             self._state(room)["due"] = None
 
+    def note_failed(self, room, now=None):
+        """这次没发出去。歇一会儿再判断，避免连续搜索却不说话。"""
+        moment = time.monotonic() if now is None else now
+        with self._lock:
+            state = self._state(room)
+            state["retry_after"] = moment + RETRY_SECONDS
+            state["due"] = None
+
     def heard(self, room, now=None):
         """群里有人说了一句。等安静几秒再判断要不要接，不限机器人是不是刚说过话。"""
         moment = time.monotonic() if now is None else now
@@ -71,6 +81,8 @@ class RoomListener:
         with self._lock:
             state = self._state(room)
             state["beats"] = [item for item in state["beats"] if moment - item < HOUR]
+            if state["retry_after"] is not None and moment < state["retry_after"]:
+                return None
             if state["due"] is not None:
                 if moment < state["due"]:
                     return None

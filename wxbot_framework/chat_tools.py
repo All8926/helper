@@ -107,9 +107,15 @@ def _search_doubao(settings, llm, query):
 
 def web_search_tool(llm):
     settings = llm.web_search
+    searched = False
 
     def run(args):
+        nonlocal searched
+        # 同一次回复只真正搜一次，避免模型连着搜、正文一直出不来。
+        if searched:
+            return "本轮已经搜过，请直接根据上面的结果回答，不要再搜索"
         query = _text_arg(args, "query", 128)
+        searched = True
         if settings["provider"] == "doubao":
             return _search_doubao(settings, llm, query)
         return _search_http(settings, llm.api_key, query)

@@ -455,6 +455,11 @@ class LLMTests(unittest.TestCase):
             self.assertEqual(json.loads(request.data), {"query": "今天新闻", "count": 2, "need_content": False})
             self.assertEqual(result, [{"title": "标题", "url": "https://example.com/a", "summary": "摘要"},
                                       {"title": "天气", "url": "", "summary": "晴"}])
+        tool = web_search_tool(self._search())
+        with patch("wxbot_framework.llm.urlopen", return_value=self._raw(found)) as call:
+            tool.run({"query": "第一次"})
+            self.assertEqual(tool.run({"query": "第二次"}), "本轮已经搜过，请直接根据上面的结果回答，不要再搜索")
+        self.assertEqual(call.call_count, 1)
 
     def test_search_transport_failure_reaches_the_model_as_a_tool_error(self):
         with patch("wxbot_framework.llm.urlopen", side_effect=URLError("down")):

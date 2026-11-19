@@ -188,7 +188,7 @@
     <div id="groups-panel-persona" class="hidden" role="tabpanel" aria-labelledby="groups-tab-persona">
         <form id="personality-form" class="settings-section">
           <div class="section-heading"><h2>人格库</h2><button id="personality-add" class="secondary small" type="button">添加人格</button></div>
-          <p class="section-description">每个群在「群设置」里选用一份人格。全局提示词是点名回复和未点名插话的系统提示词，人格接在它后面。留空则只有人格包装。回复长短由提示词决定；超过字数上限的回复和总结会失败并提示重试。</p>
+          <p class="section-description">每个群在「群设置」里选用一份人格。全局提示词是点名回复和未点名插话的系统提示词，人格接在它后面。留空则只有人格包装。回复长短由提示词决定。超过字数上限的回复会截短后发出，总结仍然失败并提示重试。</p>
           <label for="global-prompt">全局提示词</label>
           <textarea id="global-prompt" rows="8" spellcheck="false" placeholder="留空则不附加任务说明"></textarea>
           <label for="reply-limit">回复字数上限<input id="reply-limit" type="number" min="1" max="8000" step="1" value="600"></label>

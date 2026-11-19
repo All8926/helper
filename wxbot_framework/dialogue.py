@@ -125,13 +125,16 @@ def _plain_reply(text):
 
 
 def checked_reply(text, limit):
-    """模型正文的最后检查：取出可发送的话，不能为空、不能过长、不能带控制字符。"""
+    """取出可发送的话。空的和带控制字符的失败；超长则截到上限再发。"""
     if not isinstance(text, str):
-        raise LLMError("大模型对话结果为空或过长，请重试")
+        raise LLMError("大模型对话结果为空，请重试")
     reply = _plain_reply(text)
-    if (not reply or len(reply) > limit or
-            any(ord(char) < 32 and char not in "\n\r\t" for char in reply)):
-        raise LLMError("大模型对话结果为空或过长，请重试")
+    if not reply or any(ord(char) < 32 and char not in "\n\r\t" for char in reply):
+        raise LLMError("大模型对话结果为空，请重试")
+    if len(reply) > limit:
+        reply = reply[:limit].rstrip()
+    if not reply:
+        raise LLMError("大模型对话结果为空，请重试")
     return reply
 
 

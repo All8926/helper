@@ -318,6 +318,7 @@ class Plugin:
             ctx.logger.info("对话正文 | 群=%s | %s", room, reply)
         except (LLMError, PersonalityExpired) as error:
             ctx.logger.warning("未点名回应失败：%.2f秒 | %s", time.perf_counter() - started, error)
+            self.listener.note_failed(room, now=now)
             return
         voice_rows = self.members.recent_room_lines(room, hours * 3600, VOICE_CONTEXT_LINES, clip=None)
         guard = lambda: ctx.personality_guard(personality)
@@ -327,9 +328,11 @@ class Plugin:
                 deliver_model_reply(ctx, anchor, reply, delivery_guard=guard, speak=speak)
         except SnapshotExpired:
             ctx.logger.info("未点名回应已取消：人格已切换")
+            self.listener.note_failed(room, now=now)
             return
         except RuntimeError as error:
             ctx.logger.warning("未点名回应没有发出 | 群=%s | %s", room, error)
+            self.listener.note_failed(room, now=now)
             return
         self.listener.bot_spoke(room, beat=True, now=now)
         try:

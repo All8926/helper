@@ -80,6 +80,16 @@ class FilterTests(unittest.TestCase):
         listener.heard(ROOM, now=50)
         self.assertIsNone(listener.take(ROOM, minutes=0, limit=3, last_id=3, quiet=True, now=56))
 
+    def test_failed_attempt_waits_before_trying_again(self):
+        listener = pro.RoomListener()
+        listener.heard(ROOM, now=0)
+        listener.note_failed(ROOM, now=6)
+        self.assertIsNone(listener.take(ROOM, minutes=2, limit=3, last_id=2, quiet=True, now=7))
+        listener.heard(ROOM, now=20)
+        self.assertIsNone(listener.take(ROOM, minutes=2, limit=3, last_id=2, quiet=True, now=30))
+        self.assertEqual(listener.take(ROOM, minutes=0, limit=3, last_id=2, quiet=True,
+                                       now=6 + pro.RETRY_SECONDS), "hot")
+
     def test_beat_needs_interval_new_quiet_lines_and_room_in_the_hourly_limit(self):
         listener = pro.RoomListener()
         take = lambda now, last_id=1, quiet=True, limit=1, minutes=2: listener.take(
@@ -349,11 +359,16 @@ class PluginTests(unittest.TestCase):
             return reply
 
         self.ctx._llm.chat.side_effect = chat
-        for sequence in (2, 3):
-            self.store.record(self.message(f"第{sequence}句", sequence=sequence))
-            self.now += timedelta(seconds=10)
-            self.plugin._watch_once(now=1000 + sequence * 100)
-            self.assertEqual(self.ctx._llm.chat.call_count, sequence - 1)
+        self.store.record(self.message("第二句", sequence=2))
+        self.now += timedelta(seconds=10)
+        self.plugin._watch_once(now=1200)
+        self.assertEqual(self.ctx._llm.chat.call_count, 1)
+        self.store.record(self.message("第三句", sequence=3))
+        self.now += timedelta(seconds=10)
+        self.plugin._watch_once(now=1300)
+        self.assertEqual(self.ctx._llm.chat.call_count, 1)
+        self.plugin._watch_once(now=1200 + pro.RETRY_SECONDS)
+        self.assertEqual(self.ctx._llm.chat.call_count, 2)
         self.assertEqual(self.backend.sent, [])
 
     def test_lookup_tools_read_this_room_only(self):
@@ -529,3 +544,4 @@ class ReplyCleanupTests(unittest.TestCase):
         with self.assertRaises(LLMError):
             checked_reply(note, 600)
         self.assertEqual(checked_reply("今晚吃火锅", 600), "今晚吃火锅")
+        self.assertEqual(checked_reply("字" * 20, 10), "字" * 10)
