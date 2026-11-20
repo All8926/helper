@@ -413,6 +413,8 @@ class LLMClient:
         self.vision = normalize_vision(options.get("vision"))
         self.decision = normalize_decision(options.get("decision"))
         self._options = options
+        # 由机器人工作区接上。单独校验配置时没有账本，不记用量。
+        self.usage = None
 
     @classmethod
     def from_file(cls, path, decision_path=None):
@@ -434,10 +436,12 @@ class LLMClient:
         """看图用的客户端。没单独配置看图模型时就是自己。"""
         if not self.vision["model"]:
             return self
-        return LLMClient({**self._options, "model": self.vision["model"],
-                          "base_url": self.vision["base_url"] or self.base_url,
-                          "api_key": self.vision["api_key"] or self._api_key,
-                          "extra_body": {}, "web_search": None, "vision": None, "decision": None})
+        client = LLMClient({**self._options, "model": self.vision["model"],
+                            "base_url": self.vision["base_url"] or self.base_url,
+                            "api_key": self.vision["api_key"] or self._api_key,
+                            "extra_body": {}, "web_search": None, "vision": None, "decision": None})
+        client.usage = self.usage
+        return client
 
     def _apply_thinking(self, payload, enabled):
         """按群开关写各家的思考字段。扩展参数里已经写过的项不覆盖。"""
@@ -507,7 +511,16 @@ class LLMClient:
         return payload, wait
 
     def _post_json(self, url, payload, timeout, api_key):
-        return post_json(url, payload, timeout, api_key)
+        # 用已经入账的用量判断。这次返回后才计入，所以可能略微超出上限。
+        if self.usage is not None:
+            reason = self.usage.refusal()
+            if reason:
+                logging.getLogger("LLM").info("%s", reason)
+                raise LLMError(reason)
+        result = post_json(url, payload, timeout, api_key)
+        if self.usage is not None:
+            self.usage.record(result)
+        return result
 
     def chat(self, system, user, tools=(), *, image=None, thinking=True):
         """纯文本回复。模型自己决定调不调工具，最多 MAX_TOOL_ROUNDS 轮，之后只要正文。"""

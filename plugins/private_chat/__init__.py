@@ -75,6 +75,9 @@ class Plugin:
         self._answer(message, ctx)
 
     def _answer(self, message, ctx):
+        if _over_limit(ctx):
+            self._reply_asleep(message, ctx)
+            return
         started = time.perf_counter()
         guard = None
         try:
@@ -93,6 +96,24 @@ class Plugin:
                 ctx.reply(message, "暂时无法回复，请稍后再试。", delivery_guard=guard)
             except SnapshotExpired:
                 pass
+
+    def _reply_asleep(self, message, ctx):
+        """到了每日上限就不再叫模型，直接回这一句。"""
+        from wxbot_framework.token_usage import SLEEP_REPLY
+        try:
+            personality = self.members.private_personality(message.chat_id)
+            snapshot = self.members.conversation_snapshot(message)
+            guard = lambda: ctx.response_guard(snapshot, personality)
+            if not ctx.reply(message, SLEEP_REPLY, delivery_guard=guard):
+                ctx.logger.warning("上限提示没有发出 | 私聊=%s", message.chat_id)
+                return
+            try:
+                self.members.record_bot_reply(message, SLEEP_REPLY)
+            except Exception:
+                ctx.logger.warning("上限提示已发出，但没有写入流水")
+            ctx.logger.info("今日对话已达上限 | 私聊=%s", message.chat_id)
+        except SnapshotExpired:
+            ctx.logger.info("私聊回复已取消：记录或人格已变更")
 
     def reply_to_friend(self, message, ctx, snapshot, personality, delivery_guard):
         """上下文已准备好，按这个人的语音设置发送回复。"""
@@ -186,3 +207,11 @@ class Plugin:
             return
         self.images.remember(message.chat_id, message.sender_id,
                              message.data.get("native_message_id"), message.image_path)
+
+
+def _over_limit(ctx):
+    from wxbot_framework.token_usage import dialogue_blocked
+    try:
+        return dialogue_blocked(ctx.llm)
+    except Exception:
+        return False

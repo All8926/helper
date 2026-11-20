@@ -48,7 +48,7 @@ const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
 const activeStates = ['starting','running','stopping'];
 const profileLabel = row => loggedAccounts.find(account=>account.wxid===row?.account)?.name || row?.account || (row?.id==='default'?'默认配置':row?.name) || '当前账号';
-const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', private:'私聊对话', tasks:'定时任务', contacts:'联系人', moments:'朋友圈', articles:'公众号文章', models:'模型与语音', logs:'运行日志'};
+const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', private:'私聊对话', tasks:'定时任务', contacts:'联系人', moments:'朋友圈', articles:'公众号文章', models:'模型与语音', usage:'使用统计', logs:'运行日志'};
 const pluginNames = {anti_recall_local:['本机防撤回'], anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], anti_recall_voice:['语音防撤回'], image_gallery:['图库图片'], image_generation:['AI 生图'], wechat_update_guard:['微信更新保护'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], private_chat:['私聊对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -92,6 +92,7 @@ function navigate() {
   articles.render();
   if(name==='groups' && state?.connected && !sendChatsAttempted && !sendLoading)loadSendChats();
   if(name==='tasks')loadTasks();
+  if(name==='usage')loadUsage();
 }
 function renderRobotOptions() {
   const names={stopped:'已停止',starting:'启动中',running:'等待连接',stopping:'停止中',error:'异常'};
@@ -119,7 +120,9 @@ function renderState() {
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form):not(#behavior-form):not(#personality-form):not(#private-chat-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form):not(#behavior-form):not(#personality-form):not(#private-chat-form):not(#usage-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  $('#usage-save').disabled=unavailable||busy;
+  $('#usage-refresh').disabled=unavailable||busy;
   for (const id of ['save-behavior', 'save-personalities', 'save-private-chat']) $('#'+id).disabled=unavailable||!state||busy;
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
@@ -1494,6 +1497,66 @@ $('#task-list').onclick=event=>{
     await loadTasks();toast('任务已更新');
   });
 };
+let usageGeneration = 0, usageDirty = false;
+const tokenCount = value => Number(value || 0).toLocaleString('zh-CN');
+function renderUsage(data) {
+  const limit = data.limit || 0;
+  const callLimit = data.call_limit || 0;
+  const notes = [];
+  if (data.reached) notes.push('已达到今日 token 上限，下一次对话会被拒绝。');
+  if (data.calls_reached) notes.push('已达到今日请求次数上限，下一次对话会被拒绝。');
+  if (data.unreported) notes.push(`今日有 ${tokenCount(data.unreported)} 次请求没有返回用量。`);
+  const tokenLine = limit ? `今日已用 ${tokenCount(data.total)} / ${tokenCount(limit)} token` : `今日已用 ${tokenCount(data.total)} token，未设 token 上限`;
+  const callLine = callLimit ? `已请求 ${tokenCount(data.calls)} / ${tokenCount(callLimit)} 次` : `已请求 ${tokenCount(data.calls)} 次，未设次数上限`;
+  $('#usage-today').textContent = tokenLine + '。' + callLine;
+  const status = $('#usage-status');
+  status.textContent = notes.join('');
+  status.classList.toggle('usage-reached', !!(data.reached || data.calls_reached));
+  if (!usageDirty) {
+    $('#usage-limit').value = String(limit);
+    $('#usage-call-limit').value = String(callLimit);
+  }
+  const rows = Array.isArray(data.days) ? data.days : [];
+  $('#usage-days').innerHTML = rows.map(row => {
+    const missing = row.unreported ? `<span class="count">其中 ${tokenCount(row.unreported)} 次无用量</span>` : '';
+    return `<tr><td>${escape(row.day)}</td><td>${tokenCount(row.prompt)}</td><td>${tokenCount(row.completion)}</td><td>${tokenCount(row.total)}</td><td>${tokenCount(row.calls)}${missing}</td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="table-empty">还没有记录。</td></tr>';
+}
+async function loadUsage() {
+  if (location.hash.slice(1) !== 'usage' || !serviceAvailable) return;
+  const generation = ++usageGeneration, requested = robot;
+  try {
+    const data = await api('token-usage', undefined, requested);
+    if (generation !== usageGeneration || requested !== robot) return;
+    renderUsage(data);
+  } catch (error) {
+    if (generation !== usageGeneration || requested !== robot) return;
+    $('#usage-today').textContent = error.message;
+    $('#usage-status').textContent = '';
+    $('#usage-status').classList.remove('usage-reached');
+    $('#usage-days').innerHTML = '<tr><td colspan="5" class="table-empty">用量没有读出来。</td></tr>';
+  }
+}
+$('#usage-limit').addEventListener('input', () => { usageDirty = true; });
+$('#usage-call-limit').addEventListener('input', () => { usageDirty = true; });
+$('#usage-refresh').onclick = () => { usageDirty = false; loadUsage(); };
+function wholeLimit(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 && number <= 100000000 ? number : null;
+}
+$('#usage-form').onsubmit = event => {
+  event.preventDefault();
+  const limit = wholeLimit($('#usage-limit').value);
+  const callLimit = wholeLimit($('#usage-call-limit').value);
+  if (limit === null) { toast('每日 token 上限应为 0 到 100000000 的整数', true); return; }
+  if (callLimit === null) { toast('每日请求次数上限应为 0 到 100000000 的整数', true); return; }
+  action(async () => {
+    const data = await api('token-usage', {limit, call_limit: callLimit});
+    usageDirty = false;
+    renderUsage(data);
+    toast('上限已保存');
+  });
+};
 taskKind();
 document.querySelectorAll('[data-page]').forEach(link=>link.addEventListener('click',()=>{if(link.hash===location.hash)navigate();}));
 window.addEventListener('hashchange',navigate);navigate();
@@ -1508,6 +1571,9 @@ async function switchRobot(identifier){
   resetContacts();
   resetComposer();
   taskRows=[];taskActions=[];taskActionSignature='';taskGeneration++;resetTaskForm();renderTasks();
+  usageDirty=false;usageGeneration++;
+  $('#usage-today').textContent='正在读取…';$('#usage-status').textContent='';$('#usage-status').classList.remove('usage-reached');
+  $('#usage-days').innerHTML='<tr><td colspan="5" class="table-empty">正在读取…</td></tr>';
   messageGeneration++;messages=[];messageCursor=0;messageStream='';messageError='';$('#message-search').value='';messageSignature='';renderMessages();
   robot=identifier;sessionStorage.setItem('helper-robot',robot);
   $('#robot-select').value=robot;

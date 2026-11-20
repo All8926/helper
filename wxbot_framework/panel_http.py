@@ -119,6 +119,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, controller.send_friend_request(data))
                 if path == '/api/scheduled-tasks':
                     return self.send(200, controller.save_scheduled_task(data))
+                if path == '/api/token-usage':
+                    return self.send(200, controller.save_token_limit(data))
                 if path == '/api/scheduled-tasks/delete':
                     return self.send(200, controller.delete_scheduled_task(data))
                 if path == '/api/scheduled-tasks/toggle':
@@ -158,6 +160,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.snapshot())
             if path == '/api/scheduled-tasks':
                 return self.send(200, controller.list_scheduled_tasks())
+            if path == '/api/token-usage':
+                return self.send(200, controller.token_usage())
             if path == '/api/scheduled-actions':
                 return self.send(200, controller.scheduled_action_types())
             if path == '/api/config':

@@ -79,6 +79,11 @@ def _search_http(settings, fallback_key, query):
 
 def _search_doubao(settings, llm, query):
     """方舟同时收到 tools 和 web_search_options 时会关掉搜索，所以单独请求一次。"""
+    usage = getattr(llm, "usage", None)
+    if usage is not None:
+        reason = usage.refusal()
+        if reason:
+            raise LLMError(reason)
     base = settings["base_url"] or llm.base_url
     endpoint = base if base.endswith("/chat/completions") else base + "/chat/completions"
     body = {"model": llm.model, "stream": False, "max_tokens": 800, "web_search_options": {},
@@ -86,6 +91,8 @@ def _search_doubao(settings, llm, query):
             "messages": [{"role": "system", "content": DOUBAO_SEARCH_SYSTEM}, {"role": "user", "content": query}]}
     result = post_json(endpoint, body, max(settings["timeout_seconds"], 15),
                        settings["api_key"] or llm.api_key, label="联网搜索")
+    if usage is not None:
+        usage.record(result)
     try:
         message = result["choices"][0]["message"]
     except (TypeError, KeyError, IndexError):

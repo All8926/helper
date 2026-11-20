@@ -109,6 +109,9 @@ class Plugin:
         return bool(text) and not own_group_command(text) and text.split(maxsplit=1)[0] not in CONTROL
 
     def _answer(self, message, ctx):
+        if _over_limit(ctx):
+            self._reply_asleep(message, ctx)
+            return
         room = message.chat_id
         personality = ctx.personality(message)
         started = time.perf_counter()
@@ -131,6 +134,25 @@ class Plugin:
                 ctx.reply(message, "暂时无法回复，请稍后再艾特我。", delivery_guard=guard)
             except SnapshotExpired:
                 pass
+
+    def _reply_asleep(self, message, ctx):
+        """到了每日上限就不再叫模型，直接回这一句。"""
+        from wxbot_framework.token_usage import SLEEP_REPLY
+        try:
+            snapshot = self.members.conversation_snapshot(message)
+            personality = ctx.personality(message)
+            guard = lambda: ctx.response_guard(snapshot, personality)
+            if not ctx.reply(message, SLEEP_REPLY, delivery_guard=guard):
+                ctx.logger.warning("上限提示没有发出 | 群=%s", message.chat_id)
+                return
+            self.listener.bot_spoke(message.chat_id)
+            try:
+                self.members.record_bot_reply(message, SLEEP_REPLY)
+            except Exception:
+                ctx.logger.warning("上限提示已发出，但没有写入群流水")
+            ctx.logger.info("今日对话已达上限 | 群=%s", message.chat_id)
+        except (SnapshotExpired, PersonalityExpired):
+            ctx.logger.info("艾特对话已取消：记录或人格状态已变更")
 
     def _with_quoted_image(self, message, snapshot):
         """引用图若比这条消息更晚才写入流水，仍补进这次上下文。"""
@@ -291,6 +313,9 @@ class Plugin:
 
     def _speak_up(self, ctx, room, trigger, last, *, now=None):
         """先问决策模型该不该说，该说再由对话模型写一句，直接发到群里。"""
+        if _over_limit(ctx):
+            ctx.logger.info("未点名回应 | 群=%s | 今日对话已达上限，不触发", room)
+            return
         bot = self.members.account
         started = time.perf_counter()
         hours, _ = self.members.context_window(room)
@@ -359,3 +384,11 @@ class Plugin:
     def _anchor(self, room, last):
         return Message("", room, sender_id=self.members.account, is_group=True,
                        session_id=last.get("session_id") or "", sequence=0)
+
+
+def _over_limit(ctx):
+    from wxbot_framework.token_usage import dialogue_blocked
+    try:
+        return dialogue_blocked(ctx.llm)
+    except Exception:
+        return False

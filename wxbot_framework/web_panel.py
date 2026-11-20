@@ -922,6 +922,31 @@ class PanelController:
             self._article_account(account, required=True)
         return dict(result, account=account)
 
+    def _token_book(self):
+        from .token_usage import open_usage
+        return open_usage(self.workspace / '.runtime' / 'token_usage.json')
+
+    def token_usage(self):
+        try:
+            return self._token_book().snapshot()
+        except (OSError, ValueError):
+            raise PanelError('用量记录无法读取') from None
+
+    def save_token_limit(self, data):
+        from .token_usage import MAX_DAILY_LIMIT
+        limit = data.get('limit')
+        call_limit = data.get('call_limit')
+        if type(limit) is not int or not 0 <= limit <= MAX_DAILY_LIMIT:
+            raise PanelError(f'每日 token 上限应为 0–{MAX_DAILY_LIMIT} 的整数，0 表示不限制')
+        if type(call_limit) is not int or not 0 <= call_limit <= MAX_DAILY_LIMIT:
+            raise PanelError(f'每日请求次数上限应为 0–{MAX_DAILY_LIMIT} 的整数，0 表示不限制')
+        try:
+            book = self._token_book()
+            book.set_limits(limit, call_limit)
+            return book.snapshot()
+        except (OSError, ValueError):
+            raise PanelError('用量记录无法保存') from None
+
     def list_scheduled_tasks(self):
         self.scheduled_tasks.start()
         account = self.store.load().get('wechat_account')
