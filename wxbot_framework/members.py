@@ -16,8 +16,8 @@ from .config import validate_name
 from .memory import DIARY_DAYS, SOURCE_CHARS, SOURCE_LINE_CHARS, SOURCE_LINES
 from .room_behavior import (BehaviorError, RESERVED_PERSONALITY,
                             alias_mentioned as name_mentioned, normalize_personalities,
-                            normalize_private_chat, normalize_room_setting, public_personalities,
-                            normalize_global_prompt, normalize_reply_limit, write_json)
+                            normalize_private_chat, normalize_room_setting, normalize_voice_library,
+                            public_personalities, normalize_global_prompt, normalize_reply_limit, write_json)
 from .text import validate_mentions
 
 logger = logging.getLogger("Members")
@@ -154,6 +154,11 @@ class MemberStore:
         except BehaviorError as error:
             raise MemberError(str(error)) from error
         self.personalities = public_personalities(items)
+        try:
+            self.voice_library = normalize_voice_library(
+                options["voice_library"] if "voice_library" in options else None)
+        except BehaviorError as error:
+            raise MemberError(str(error)) from error
         try:
             self.global_prompt = normalize_global_prompt(options["global_prompt"] if "global_prompt" in options else None)
             self.reply_limit = normalize_reply_limit(options.get("reply_limit"))
@@ -545,9 +550,10 @@ class MemberStore:
             return result
 
     def update_behavior(self, data):
-        """保存人格库或单个群的管理员、别名和启用人格，并立刻作用于当前进程。"""
+        """保存人格库、音色库或单个群的设置，并立刻作用于当前进程。"""
         if not isinstance(data, dict) or ("personalities" not in data and "room" not in data
-                                          and "global_prompt" not in data and "reply_limit" not in data):
+                                          and "global_prompt" not in data and "reply_limit" not in data
+                                          and "voice_library" not in data):
             raise MemberError("没有要保存的群聊行为")
         if "reply_limit" in data:
             self.reply_limit = normalize_reply_limit(data["reply_limit"])
@@ -558,6 +564,8 @@ class MemberStore:
         elif "global_prompt" in data or "reply_limit" in data:
             with self._lock:
                 self._persist_behavior()
+        if "voice_library" in data:
+            self.apply_voice_library(data["voice_library"])
         if "room" in data:
             self.apply_room(data["room"], data.get("setting"))
 
@@ -593,6 +601,13 @@ class MemberStore:
                 self.private_chat = {**self.private_chat, "people": people,
                                      "names": {key: item["name"] for key, item in people.items() if item["name"]}}
             self.personalities = public_personalities(items)
+            self._persist_behavior()
+
+    def apply_voice_library(self, raw):
+        """保存音色库。只更新名称和音色 ID 的对照，不改各群已经选中的音色。"""
+        items = normalize_voice_library(raw)
+        with self._lock:
+            self.voice_library = items
             self._persist_behavior()
 
     def apply_room(self, room, setting):
@@ -660,6 +675,7 @@ class MemberStore:
             raw["personalities"] = self.personalities
             raw["global_prompt"] = self.global_prompt
             raw["reply_limit"] = self.reply_limit
+            raw["voice_library"] = self.voice_library
             raw["room_settings"] = self.room_settings
             raw["private_chat"] = self.private_chat
         self._mutate_config(mutate)
@@ -795,9 +811,8 @@ class MemberStore:
         current = self.voice_selection(room)
         if mode == "off":
             if supplied:
-                name = current.name if current.voice_id == supplied and current.name else supplied
                 kept = current.mode if current.voice_id else "always"
-                self.set_voice(room, supplied, name, enabled=True, mode=kept)
+                self.set_voice(room, supplied, self._voice_label(supplied, current), enabled=True, mode=kept)
             return self.set_voice(room, "", "", enabled=False)
         if mode not in ("always", "auto"):
             raise MemberError("语音回复应为关闭、始终语音或自动")
@@ -806,8 +821,16 @@ class MemberStore:
             raise MemberError("请填写本群音色 ID，或在「模型与语音」中填写默认音色 ID")
         if not VOICE_ID.fullmatch(chosen):
             raise MemberError(VOICE_ID_HINT)
-        name = current.name if current.voice_id == chosen and current.name else chosen
-        return self.set_voice(room, chosen, name, enabled=True, mode=mode)
+        return self.set_voice(room, chosen, self._voice_label(chosen, current), enabled=True, mode=mode)
+
+    def _voice_label(self, voice_id, current):
+        """音色库里只有一个名称对上这个 ID 时，页面保存就用这个名称。"""
+        names = [item["name"] for item in self.voice_library if item["voice_id"] == voice_id]
+        if len(names) == 1:
+            return names[0]
+        if current.voice_id == voice_id and current.name:
+            return current.name
+        return voice_id
 
     def set_voice_mode(self, room, mode):
         """关闭、始终语音或自动。后两种沿用本群已经保存的音色 ID。"""

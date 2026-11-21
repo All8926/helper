@@ -14,6 +14,7 @@ RESERVED_PERSONALITY = "默认"
 MAX_ADMINS = 32
 MAX_ALIASES = 8
 MAX_PERSONALITIES = 12
+MAX_VOICE_LIBRARY = 24
 MAX_PROMPT = 8000
 DEFAULT_CONTEXT_HOURS = 6
 DEFAULT_CONTEXT_LIMIT = 300
@@ -74,6 +75,36 @@ def normalize_personalities(raw):
 
 def public_personalities(items):
     return [{"name": item["name"], "prompt": item["prompt"]} for item in items]
+
+
+def normalize_voice_library(raw):
+    """整理音色库。没配置时为空，不预置音色。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_VOICE_LIBRARY:
+        raise BehaviorError("音色最多 24 个")
+    from .tts import VOICE_ID, VOICE_ID_HINT, normalize_voice_id
+    result, seen = [], set()
+    reserved = {"关闭", "文字", "自动", "始终"}
+    for item in raw:
+        if not isinstance(item, dict):
+            raise BehaviorError("音色应为名称和音色 ID")
+        name = item.get("name")
+        if not isinstance(name, str) or not PERSONALITY_NAME.fullmatch(name.strip()):
+            raise BehaviorError("音色名称应为 1–16 个汉字、字母或数字")
+        name = name.strip()
+        if name in reserved:
+            raise BehaviorError(f"「{name}」不能作为音色名称")
+        if not isinstance(item.get("voice_id"), str):
+            raise BehaviorError(VOICE_ID_HINT)
+        voice_id = normalize_voice_id(item.get("voice_id"))
+        if not VOICE_ID.fullmatch(voice_id):
+            raise BehaviorError(VOICE_ID_HINT)
+        if name in seen:
+            raise BehaviorError(f"音色名称重复：{name}")
+        seen.add(name)
+        result.append({"name": name, "voice_id": voice_id})
+    return result
 
 
 def normalize_global_prompt(value):
@@ -424,9 +455,14 @@ def view_behavior(options):
         private_chat = normalize_private_chat(options.get("private_chat"), known, fallback=True)
     except (BehaviorError, TypeError, ValueError):
         private_chat = normalize_private_chat(None, known)
+    try:
+        voices = normalize_voice_library(options["voice_library"] if "voice_library" in options else None)
+    except (BehaviorError, TypeError):
+        voices = []
     return {"personalities": public_personalities(items),
             "global_prompt": guard,
             "reply_limit": limit,
+            "voice_library": voices,
             "room_settings": settings if isinstance(settings, dict) else {},
             "private_chat": private_chat}
 

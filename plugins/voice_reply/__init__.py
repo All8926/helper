@@ -1,5 +1,5 @@
 """群音色菜单和切换；模型回复由共享语音层发送。"""
-from wxbot_framework.members import SnapshotExpired
+from wxbot_framework.members import MemberError, SnapshotExpired
 from wxbot_framework.summary import split_text
 from wxbot_framework.tts import TTSError
 
@@ -29,10 +29,12 @@ class Plugin:
         if message.type != 1 or not message.is_group or message.chat_id not in self.members.groups:
             return
         parts = message.text.strip().split(maxsplit=1)
-        if not parts or parts[0] not in ('/查看音色', '/音色', '/语音'):
+        if not parts or parts[0] not in ('/查看音色', '/音色', '/语音', '/切换音色'):
             return
         try:
-            if parts[0] == '/语音':
+            if parts[0] == '/切换音色':
+                text = self._switch_library(message, parts[1].strip() if len(parts) == 2 else '')
+            elif parts[0] == '/语音':
                 text = self._switch_mode(message, ctx, parts[1].strip() if len(parts) == 2 else '')
             elif parts[0] == '/查看音色':
                 query = parts[1].strip() if len(parts) == 2 else ''
@@ -54,6 +56,9 @@ class Plugin:
                 if state.enabled and not current.startswith('未选择'):
                     current += '（自动）' if state.mode == 'auto' else '（始终语音）'
                 sections = [f'本群音色：{current}']
+                library = [item['name'] for item in self.members.voice_library]
+                if library:
+                    sections.append('音色库：' + '、'.join(library) + '\n切换：/切换音色 名称')
                 if page == 1:
                     personal = [voice for voice in voices if not keyword or keyword.casefold() in voice.name.casefold()]
                     names = [voice.name for voice in personal]
@@ -80,6 +85,7 @@ class Plugin:
                 if public.window_limited:
                     sections.append('公开列表受接口浏览范围限制，可按关键词搜索更多音色。')
                 sections.append('/查看音色 关键词：搜索\n/查看音色 全部：查看各国语言音色\n/音色 名称：切换\n'
+                                '/切换音色 名称：按音色库切换\n'
                                 '/音色 自动：按对话决定语音或文字\n/音色 始终：都用语音\n/音色 关闭：恢复文字回复\n'
                                 '/语音 开启|关闭|自动：只改语音方式，不改音色')
                 text = '\n\n'.join(sections)
@@ -95,10 +101,29 @@ class Plugin:
                     text = f'本群音色已切换为：{state.name}。之后都用语音回复。'
             for part in split_text(text):
                 ctx.reply(message, part)
-        except TTSError as error:
+        except (TTSError, MemberError) as error:
             ctx.reply(message, str(error))
         except SnapshotExpired:
             ctx.logger.info('音色查询已取消：配置已更新')
+
+    def _switch_library(self, message, name):
+        """按音色库名称换成对应 ID。已经是自动语音时继续自动，否则改为始终语音。"""
+        library = self.members.voice_library
+        if not name:
+            if not library:
+                return '音色库还是空的。请先在管理台「群聊与会话 → 音色库」添加名称和音色 ID。\n用法：/切换音色 名称'
+            lines = [f"{item['name']}：{item['voice_id']}" for item in library]
+            return '音色库：\n' + '\n'.join(lines) + '\n\n用法：/切换音色 名称'
+        match = next((item for item in library if item['name'] == name), None)
+        if match is None:
+            listed = '、'.join(item['name'] for item in library) or '（空）'
+            raise TTSError(f'音色库里没有「{name}」。可选：{listed}')
+        current = self.members.voice_selection(message.chat_id)
+        mode = 'auto' if current.enabled and current.mode == 'auto' else 'always'
+        state = self.members.set_voice(message.chat_id, match['voice_id'], match['name'], mode=mode)
+        if state.mode == 'auto':
+            return f'本群音色已切换为：{state.name}。之后按对话决定用语音还是文字。'
+        return f'本群音色已切换为：{state.name}。之后都用语音回复。'
 
     def _switch_mode(self, message, ctx, argument):
         """只改本群用不用语音。开启是每句都念，自动按门槛决定，关闭只用文字。"""

@@ -652,6 +652,15 @@ class HTTPTests(PanelFixture):
         self.assertNotIn('activity', saved['room_settings'][room])
         self.controller.save_room_behavior({'room': room, 'setting': {'unnamed_reply': True, 'hourly_limit': 2}, 'voice_mode': 'off'})
         self.assertFalse(self.controller.configuration()['room_voices'][room]['enabled'])
+        saved = self.controller.save_room_behavior({'voice_library': [
+            {'name': '男生音', 'voice_id': 'zh_male_m191_uranus_bigtts'}]})
+        self.assertEqual(saved['voice_library'], [{'name': '男生音', 'voice_id': 'zh_male_m191_uranus_bigtts'}])
+        self.assertEqual(read_json(path)['voice_library'][0]['name'], '男生音')
+        saved = self.controller.save_room_behavior({
+            'room': room, 'setting': {'unnamed_reply': True}, 'voice_mode': 'always',
+            'voice_id': 'zh_male_m191_uranus_bigtts'})
+        self.assertEqual(saved['room_voices'][room]['name'], '男生音')
+        self.assertEqual(saved['room_voices'][room]['voice_id'], 'zh_male_m191_uranus_bigtts')
 
 
 class LogTests(unittest.TestCase):

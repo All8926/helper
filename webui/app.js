@@ -42,6 +42,7 @@ let taskRows=[], taskActions=[], taskActionSignature='', taskGeneration=0, taskL
 let groupNameDraft = new Map(), discoveredGroups = [];
 let behaviorRoom = '', behaviorDraft = new Map(), behaviorDirty = false, behaviorMembers = [], memberPickGeneration = 0, membersExpanded = false, memberListRoom = '';
 let personalityItems = [], personalityDirty = false;
+let voiceLibraryItems = [], voiceLibraryDirty = false;
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
 let privateDirty=false, privatePeople={}, privateOrder=[], privateSelected='', privatePickRows=[], privateNameTouched=new Set();
 const contactPageSize=50;
@@ -120,10 +121,10 @@ function renderState() {
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form):not(#behavior-form):not(#personality-form):not(#private-chat-form):not(#usage-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form):not(#behavior-form):not(#personality-form):not(#voice-library-form):not(#private-chat-form):not(#usage-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
   $('#usage-save').disabled=unavailable||busy;
   $('#usage-refresh').disabled=unavailable||busy;
-  for (const id of ['save-behavior', 'save-personalities', 'save-private-chat']) $('#'+id).disabled=unavailable||!state||busy;
+  for (const id of ['save-behavior', 'save-personalities', 'save-voice-library', 'save-private-chat']) $('#'+id).disabled=unavailable||!state||busy;
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
   renderContacts();
@@ -361,6 +362,7 @@ function fillPrivateEditor() {
   $('#private-voice-threshold').value = person.voice_threshold ?? 0.6;
   $('#private-sing').value = person.sing_threshold ?? 0.85;
   $('#private-voice-id').value = person.voice_id || '';
+  syncVoiceLibrarySelect($('#private-voice-library'), person.voice_id || '');
 }
 function selectPrivate(id) {
   if (id === privateSelected) return;
@@ -478,15 +480,20 @@ function syncRoomBehavior() {
   if (rooms.includes(selected)) $('#behavior-room').value = selected;
   paintBehaviorRooms();
   fillPersonalityChoices();
-  if (!behaviorDirty) {
-    showBehavior(behaviorRoom);
-    if (behaviorRoom) loadMemberPicks();
-  }
   if (!personalityDirty) {
     personalityItems = (config?.personalities || []).map(item => ({name: item.name, prompt: item.prompt, previous: item.name}));
     $('#global-prompt').value = config?.global_prompt || '';
     $('#reply-limit').value = Number.isInteger(config?.reply_limit) ? config.reply_limit : 600;
     paintPersonalities();
+  }
+  if (!voiceLibraryDirty) {
+    voiceLibraryItems = (config?.voice_library || []).map(item => ({name: item.name, voice_id: item.voice_id}));
+    paintVoiceLibrary();
+  }
+  paintVoiceLibraryChoices();
+  if (!behaviorDirty) {
+    showBehavior(behaviorRoom);
+    if (behaviorRoom) loadMemberPicks();
   }
 }
 function fillPersonalityChoices() {
@@ -517,12 +524,13 @@ function showBehavior(room) {
   $('#behavior-voice-threshold').value = Number.isFinite(Number(saved.voice_threshold)) ? saved.voice_threshold : legacyVoice;
   $('#behavior-sing').value = Number.isFinite(Number(saved.sing_threshold)) ? saved.sing_threshold : 0.85;
   $('#behavior-voice-id').value = saved.voice_id != null ? saved.voice_id : (voice.voice_id || '');
+  syncVoiceLibrarySelect($('#behavior-voice-library'), $('#behavior-voice-id').value.trim());
   $('#behavior-thinking').checked = saved.deep_thinking !== false;
   const voiceHint = $('#behavior-voice-hint');
   const named = voice.name && voice.voice_id && voice.name !== voice.voice_id;
   if (voiceHint) voiceHint.textContent = named
-    ? `当前音色：${voice.name}。ID 留空时，始终语音和自动会使用「模型与语音」里的默认音色 ID。`
-    : '填写音色 ID，或留空使用「模型与语音」里的默认音色 ID。也可以在群里用 /音色 名称 选择。';
+    ? `当前音色：${voice.name}。可以从音色库选择，或直接改 ID。留空时使用默认音色 ID。`
+    : '可以从音色库选择，或直接填写音色 ID。留空时使用「模型与语音」里的默认音色 ID。群里发送 /切换音色 名称 也会换成对应 ID。';
   const notice = (saved.plugin_options || {}).group_notice || {};
   $('#behavior-welcome').value = notice.welcome_template || '';
   $('#behavior-leave').value = notice.leave_template || '';
@@ -579,7 +587,7 @@ function paintBehaviorRooms() {
     return `<button type="button" class="room-pick" data-behavior-room="${escape(room)}" aria-pressed="${room === behaviorRoom}"><span class="room-pick-text"><strong>${escape(title)}</strong><small>${escape(room)}</small></span><small>${escape(alias ? persona + ' · ' + alias : persona)}</small></button>`;
   }).join('') : '<p class="empty">还没有已保存的群。先到「接入群聊」添加。</p>';
 }
-const groupsTabIds = ['send', 'rooms', 'settings', 'persona'];
+const groupsTabIds = ['send', 'rooms', 'settings', 'persona', 'voices'];
 function showGroupsTab(name) {
   for (const id of groupsTabIds) {
     const active = id === name;
@@ -589,6 +597,31 @@ function showGroupsTab(name) {
     tab.tabIndex = active ? 0 : -1;
     panel.classList.toggle('hidden', !active);
   }
+}
+function voiceLibraryEntries() {
+  return Array.isArray(config?.voice_library) ? config.voice_library : [];
+}
+function paintVoiceLibraryChoices() {
+  const html = '<option value="">手动填写</option>' + voiceLibraryEntries().map(item => `<option value="${escape(item.name)}">${escape(item.name)}</option>`).join('');
+  for (const id of ['behavior-voice-library', 'private-voice-library']) {
+    const select = document.getElementById(id);
+    if (!select) continue;
+    const current = select.value;
+    select.innerHTML = html;
+    select.value = [...select.options].some(option => option.value === current) ? current : '';
+  }
+}
+function syncVoiceLibrarySelect(select, voiceId) {
+  if (!select) return;
+  const chosen = voiceLibraryEntries().find(item => item.name === select.value);
+  if (chosen && chosen.voice_id === voiceId) return;
+  const matches = voiceLibraryEntries().filter(item => item.voice_id && item.voice_id === voiceId);
+  select.value = matches.length === 1 ? matches[0].name : '';
+}
+function paintVoiceLibrary() {
+  $('#voice-library-list').innerHTML = voiceLibraryItems.length ? voiceLibraryItems.map((item, index) =>
+    `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-voice-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-voice-remove>删除</button></div><label>音色 ID<input data-voice-id value="${escape(item.voice_id)}" spellcheck="false" autocomplete="off" placeholder="Fish、Breeze 或豆包的音色 ID"></label></div>`).join('')
+    : '<p class="section-description">还没有音色。添加名称和音色 ID 后，群里就可以用 /切换音色 名称。</p>';
 }
 function paintPersonalities() {
   $('#personality-list').innerHTML = personalityItems.length ? personalityItems.map((item, index) =>
@@ -677,7 +710,15 @@ for (const id of groupsTabIds) {
     $('#groups-tab-' + target).focus();
   };
 }
-for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-speak', 'behavior-voice', 'behavior-voice-threshold', 'behavior-sing', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-speak', 'behavior-voice', 'behavior-voice-threshold', 'behavior-sing', 'behavior-voice-library', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+$('#behavior-voice-library').onchange = () => {
+  const item = voiceLibraryEntries().find(entry => entry.name === $('#behavior-voice-library').value);
+  if (item) $('#behavior-voice-id').value = item.voice_id;
+  behaviorDirty = true;
+};
+$('#behavior-voice-id').addEventListener('input', () => {
+  syncVoiceLibrarySelect($('#behavior-voice-library'), $('#behavior-voice-id').value.trim());
+});
 $('#behavior-plugins').onchange = () => { behaviorDirty = true; syncNoticePanel(); };
 $('#behavior-recall').onchange = () => { behaviorDirty = true; };
 $('#behavior-recall-local').onchange = () => { behaviorDirty = true; };
@@ -751,6 +792,36 @@ $('#personality-form').onsubmit = event => {
     personalityDirty = false;
     syncRoomBehavior();
     toast('人格提示词已生效');
+  });
+};
+$('#voice-library-add').onclick = () => {
+  voiceLibraryItems.push({name: '', voice_id: ''});
+  voiceLibraryDirty = true;
+  paintVoiceLibrary();
+};
+$('#voice-library-list').oninput = event => {
+  const card = event.target.closest('[data-index]');
+  if (!card) return;
+  const item = voiceLibraryItems[Number(card.dataset.index)];
+  if (event.target.matches('[data-voice-name]')) item.name = event.target.value;
+  if (event.target.matches('[data-voice-id]')) item.voice_id = event.target.value;
+  voiceLibraryDirty = true;
+};
+$('#voice-library-list').onclick = event => {
+  const button = event.target.closest('[data-voice-remove]');
+  if (!button) return;
+  voiceLibraryItems.splice(Number(button.closest('[data-index]').dataset.index), 1);
+  voiceLibraryDirty = true;
+  paintVoiceLibrary();
+};
+$('#voice-library-form').onsubmit = event => {
+  event.preventDefault();
+  action(async () => {
+    config = await api('room-behavior', {voice_library: voiceLibraryItems.map(item => ({name: item.name.trim(), voice_id: item.voice_id.trim()}))});
+    voiceLibraryDirty = false;
+    syncRoomBehavior();
+    renderPrivateChat();
+    toast('音色库已生效');
   });
 };
 $('#start-selected').onclick = () => action(()=>launchAccounts(loggedAccounts.filter(row=>selectedAccounts.has(accountKey(row))&&row.selectable&&!activeStates.includes(row.state))));
@@ -903,6 +974,11 @@ $('#private-fields').oninput=event=>{
     const label=document.querySelector(`[data-private-id="${CSS.escape(privateSelected)}"] > small`);
     if(label)label.textContent=privateVoiceLabel(event.target.value);
   }
+  if(event.target.id==='private-voice-library'){
+    const item=voiceLibraryEntries().find(entry=>entry.name===event.target.value);
+    if(item)$('#private-voice-id').value=item.voice_id;
+  }
+  if(event.target.id==='private-voice-id') syncVoiceLibrarySelect($('#private-voice-library'), event.target.value.trim());
 };
 $('#private-search').oninput=()=>paintPrivatePicks();
 $('#private-add').onclick=()=>{
@@ -1580,7 +1656,7 @@ async function switchRobot(identifier){
   state=null;config=null;logs=[];logCursor=0;selectedPlugin='';renderLogs();
   renderState();renderAccounts();
   groupNameDraft=new Map(); discoveredGroups=[]; $('#group-ids').value=''; renderGroupNames(); renderDiscoveredGroups();
-  behaviorRoom=''; behaviorDraft=new Map(); behaviorDirty=false; personalityDirty=false; behaviorMembers=[]; membersExpanded=false; memberListRoom='';
+  behaviorRoom=''; behaviorDraft=new Map(); behaviorDirty=false; personalityDirty=false; voiceLibraryDirty=false; behaviorMembers=[]; membersExpanded=false; memberListRoom='';
   await loadConfig();await poll();navigate();
 }
 $('#robot-select').onchange=event=>{

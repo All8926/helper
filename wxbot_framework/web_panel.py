@@ -28,7 +28,7 @@ from .runtime import BotApplication
 from .startup import scan_logged_accounts
 from .members import MemberError
 from .room_behavior import (BehaviorError, normalize_global_prompt, normalize_personalities, normalize_reply_limit,
-                            normalize_room_setting,
+                            normalize_room_setting, normalize_voice_library,
                             public_personalities, view_behavior, write_json)
 from .model_profiles import FILENAME as PROFILE_FILENAME, ProfileError, apply_profile, load_profiles, view_library
 from .text import validate_target, validate_mentions
@@ -617,6 +617,8 @@ class PanelController:
                 setting['personality'] = personality
             members['personalities'] = public_personalities(items)
             members['room_settings'] = settings
+        if 'voice_library' in data:
+            members['voice_library'] = normalize_voice_library(data['voice_library'])
         if 'room' in data:
             room = data.get('room')
             if not isinstance(room, str) or room not in groups or not room.endswith('@chatroom'):
@@ -626,7 +628,8 @@ class PanelController:
             room_settings = members.get('room_settings') if isinstance(members.get('room_settings'), dict) else {}
             room_settings[room] = setting
             members['room_settings'] = room_settings
-        if 'personalities' not in data and 'room' not in data and 'global_prompt' not in data and 'reply_limit' not in data:
+        if ('personalities' not in data and 'room' not in data and 'global_prompt' not in data
+                and 'reply_limit' not in data and 'voice_library' not in data):
             raise PanelError('没有要保存的群聊行为')
         write_json(paths['members'], members)
 

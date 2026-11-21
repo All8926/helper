@@ -145,6 +145,42 @@ class SpeechTests(unittest.TestCase):
         self.assertTrue(own_group_command('/查看音色'))
         self.assertTrue(own_group_command('/音色 测试乙'))
         self.assertTrue(own_group_command('/语音 自动'))
+        self.assertTrue(own_group_command('/切换音色 男生音'))
+
+    def test_voice_library_switches_by_name_without_calling_the_provider(self):
+        from wxbot_framework.room_behavior import BehaviorError
+        self.setup_speech()
+        plugin = Plugin()
+        plugin.members = self.store
+        plugin.on_message(self.message('/切换音色'), self.ctx)
+        self.assertIn('空的', self.backend.sent[-1][1])
+        male, female = 'C' * 32, 'zh_male_m191_uranus_bigtts'
+        self.store.apply_voice_library([
+            {'name': '男生音', 'voice_id': male},
+            {'name': '女生音', 'voice_id': female},
+        ])
+        self.assertEqual(self.new_store().voice_library, [
+            {'name': '男生音', 'voice_id': 'c' * 32},
+            {'name': '女生音', 'voice_id': female},
+        ])
+        with self.assertRaises(BehaviorError):
+            self.store.apply_voice_library([{'name': '坏', 'voice_id': 'nope'}])
+        plugin.on_message(self.message('/切换音色 男生音'), self.ctx)
+        state = self.store.voice_selection(ROOM)
+        self.assertEqual((state.voice_id, state.name, state.enabled, state.mode), ('c' * 32, '男生音', True, 'always'))
+        self.assertIn('男生音', self.backend.sent[-1][1])
+        self.client.voices.assert_not_called()
+        self.client.public_voices.assert_not_called()
+        plugin.on_message(self.message('/语音 自动'), self.ctx)
+        plugin.on_message(self.message('/切换音色 女生音'), self.ctx)
+        state = self.store.voice_selection(ROOM)
+        self.assertEqual((state.voice_id, state.name, state.mode), (female, '女生音', 'auto'))
+        plugin.on_message(self.message('/切换音色 没有'), self.ctx)
+        self.assertIn('没有', self.backend.sent[-1][1])
+        self.assertEqual(self.store.voice_selection(ROOM).voice_id, female)
+        self.assertEqual(self.store.voice_selection(OTHER_ROOM).voice_id, '')
+        plugin.on_message(self.message('/查看音色'), self.ctx)
+        self.assertIn('音色库：男生音、女生音', ''.join(row[1] for row in self.backend.sent))
 
     def test_voice_command_changes_mode_and_keeps_the_voice(self):
         self.setup_speech()

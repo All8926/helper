@@ -69,6 +69,7 @@
       <button type="button" id="groups-tab-rooms" role="tab" aria-selected="false" aria-controls="groups-panel-rooms" tabindex="-1">接入群聊</button>
       <button type="button" id="groups-tab-settings" role="tab" aria-selected="false" aria-controls="groups-panel-settings" tabindex="-1">群设置</button>
       <button type="button" id="groups-tab-persona" role="tab" aria-selected="false" aria-controls="groups-panel-persona" tabindex="-1">人格库</button>
+      <button type="button" id="groups-tab-voices" role="tab" aria-selected="false" aria-controls="groups-panel-voices" tabindex="-1">音色库</button>
     </div>
     <div id="groups-panel-send" role="tabpanel" aria-labelledby="groups-tab-send">
       <div class="groups-split">
@@ -146,8 +147,10 @@
               <label for="behavior-voice-threshold">语音门槛（0–1）<input id="behavior-voice-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>
               <label for="behavior-sing">清唱门槛（0–1）<input id="behavior-sing" type="number" min="0" max="1" step="0.05" value="0.85"></label>
             </div>
+            <label for="behavior-voice-library">音色库</label>
+            <select id="behavior-voice-library"></select>
             <label for="behavior-voice-id">本群音色 ID<input id="behavior-voice-id" spellcheck="false" autocomplete="off" placeholder="留空则用模型与语音里的默认音色 ID"></label>
-            <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念。自动时，决策模型给出的概率达到「语音门槛」才念，默认 0.6，越高越少念。开了语音且使用 Breeze Blue 或豆包语音时，正文被判成歌词的概率达到「清唱门槛」才唱，默认 0.85，越高越少唱。选了语音时最多连续 3 条，再长改文字。音色填 ID，留空时使用「模型与语音」里的默认音色 ID。</p>
+            <p id="behavior-voice-hint" class="group-name-hint">关闭后只用文字。始终语音每句都念。自动时，决策模型给出的概率达到「语音门槛」才念，默认 0.6，越高越少念。开了语音且使用 Breeze Blue 或豆包语音时，正文被判成歌词的概率达到「清唱门槛」才唱，默认 0.85，越高越少唱。选了语音时最多连续 3 条，再长改文字。可以从音色库选择，或直接填 ID。留空时使用「模型与语音」里的默认音色 ID。群里发送 /切换音色 名称 也会换成对应 ID。</p>
             <label class="inline" for="behavior-thinking"><input id="behavior-thinking" type="checkbox" checked>深度思考</label>
             <p class="group-name-hint">默认开启。DeepSeek 和豆包会打开或关闭深度思考，千问会打开或关闭思考，Grok 只会把思考强度调到高或低。扩展参数里已经写过的思考项仍然优先。</p>
             <label for="behavior-admins">管理员微信 ID</label>
@@ -197,6 +200,14 @@
           <div class="form-footer"><span class="live-hint">保存后，正在使用这些人格的群会按新提示词回复。</span><button id="save-personalities" class="primary" type="submit">保存人格</button></div>
         </form>
     </div>
+    <div id="groups-panel-voices" class="hidden" role="tabpanel" aria-labelledby="groups-tab-voices">
+        <form id="voice-library-form" class="settings-section">
+          <div class="section-heading"><h2>音色库</h2><button id="voice-library-add" class="secondary small" type="button">添加音色</button></div>
+          <p class="section-description">给音色 ID 起一个名称。群里发送 /切换音色 名称，当前群就会改用这个 ID。已经是自动语音时继续自动，否则改为始终语音。改了这里的 ID 之后，已经设过的群要再选一次或再发一次指令才会换成新 ID。</p>
+          <div id="voice-library-list"></div>
+          <div class="form-footer"><span class="live-hint">保存后，群指令立刻可以按这些名称切换。</span><button id="save-voice-library" class="primary" type="submit">保存音色库</button></div>
+        </form>
+    </div>
   </section>
   <section class="page hidden" id="page-tasks" aria-labelledby="tasks-heading">
     <div class="page-heading"><h1 id="tasks-heading">定时任务</h1></div>
@@ -244,8 +255,9 @@
               <label for="private-voice-threshold">语音门槛（0–1）<input id="private-voice-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>
               <label for="private-sing">清唱门槛（0–1）<input id="private-sing" type="number" min="0" max="1" step="0.05" value="0.85"></label>
             </div>
+            <label for="private-voice-library">音色库<select id="private-voice-library"></select></label>
             <label for="private-voice-id">音色 ID<input id="private-voice-id" placeholder="留空则用模型与语音里的默认音色 ID" spellcheck="false" autocomplete="off"></label>
-            <p class="group-name-hint">关闭后只用文字。自动时，决策概率达到语音门槛才念。清唱要达到清唱门槛。音色留空时使用默认音色 ID。</p>
+            <p class="group-name-hint">关闭后只用文字。自动时，决策概率达到语音门槛才念。清唱要达到清唱门槛。可以从音色库选择，留空时使用默认音色 ID。</p>
             <button id="private-remove" class="text-button" type="button">移出名单</button>
           </div>
           <div class="field-pair private-shared">
