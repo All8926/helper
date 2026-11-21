@@ -620,7 +620,7 @@ function syncVoiceLibrarySelect(select, voiceId) {
 }
 function paintVoiceLibrary() {
   $('#voice-library-list').innerHTML = voiceLibraryItems.length ? voiceLibraryItems.map((item, index) =>
-    `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-voice-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-voice-remove>删除</button></div><label>音色 ID<input data-voice-id value="${escape(item.voice_id)}" spellcheck="false" autocomplete="off" placeholder="Fish、Breeze 或豆包的音色 ID"></label></div>`).join('')
+    `<div class="voice-row" data-index="${index}"><label>名称<input data-voice-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><label>音色 ID<input data-voice-id value="${escape(item.voice_id)}" spellcheck="false" autocomplete="off" placeholder="音色 ID"></label><button type="button" class="text-button" data-voice-remove>删除</button></div>`).join('')
     : '<p class="section-description">还没有音色。添加名称和音色 ID 后，群里就可以用 /切换音色 名称。</p>';
 }
 function paintPersonalities() {

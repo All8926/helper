@@ -387,10 +387,14 @@ td { padding: 16px 20px; vertical-align: middle; border-top: 1px solid var(--tab
 .room-plugins { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-4); margin-top: var(--space-3); }
 .room-plugins label { margin: 0; }
 .room-notice { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--rule); }
-#groups-panel-persona #personality-list,
-#groups-panel-voices #voice-library-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
-#groups-panel-persona .personality-card,
-#groups-panel-voices .personality-card { margin: 0; padding: var(--space-4); border: 1px solid var(--rule); border-radius: 12px; }
+#groups-panel-persona #personality-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+#groups-panel-persona .personality-card { margin: 0; padding: var(--space-4); border: 1px solid var(--rule); border-radius: 12px; }
+/* 音色库一行放名称、ID 和删除，避免每项独占两行。 */
+#groups-panel-voices #voice-library-list { display: grid; gap: var(--space-2); }
+.voice-row { display: grid; grid-template-columns: minmax(108px, 168px) minmax(0, 1fr) auto; align-items: end; gap: var(--space-3); }
+.voice-row label { margin-top: 0; }
+.voice-row input { min-height: 36px; padding-block: 7px; }
+.voice-row .text-button { min-height: 36px; margin-bottom: 1px; padding-inline: var(--space-2); }
 .groups-band { margin-bottom: var(--space-8); }
 .groups-band-title { margin: 0 0 var(--space-4); font-size: 13px; font-weight: 650; letter-spacing: 0.06em; color: var(--muted); }
 .groups-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-6); align-items: start; }
@@ -566,6 +570,7 @@ dialog .note { margin-top: var(--space-3); }
   .form-footer { align-items: flex-start; flex-direction: column; gap: var(--space-3); }
   .form-footer .primary { align-self: flex-end; }
   .field-pair.three { grid-template-columns: 1fr; gap: 0; }
+  .voice-row { grid-template-columns: minmax(88px, 112px) minmax(0, 1fr) auto; gap: var(--space-2); }
   .log-toolbar { flex-wrap: wrap; gap: var(--space-2); padding: var(--space-3); }
   .log-toolbar > label { font-size: 11px; }
   .log-toolbar select { min-height: 36px; }
