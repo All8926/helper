@@ -60,6 +60,27 @@ class PersonalityTests(unittest.TestCase):
         plugin.on_load(self.ctx)
         return plugin
 
+    def test_personality_voice_follows_the_library_and_blank_keeps_the_current_one(self):
+        self.store.apply_voice_library([{"name": "瑶音", "voice_id": "a" * 32},
+                                        {"name": "别的", "voice_id": "b" * 32}])
+        self.store.apply_personalities([
+            {"name": "瑶", "layers": {"声口": "软。"}, "voice": "瑶音", "previous": "瑶"},
+            {"name": "嘴臭", "layers": {"声口": "说话短。"}, "previous": "嘴臭"},
+        ])
+        self.store.set_voice(ROOM, "b" * 32, "别的", enabled=False)
+        self.store.set_personality(ROOM, "瑶")
+        quiet = self.store.voice_selection(ROOM)
+        self.assertFalse(quiet.enabled)
+        self.assertEqual(quiet.voice_id, "a" * 32)
+        self.store.set_voice(ROOM, "b" * 32, "别的")
+        self.store.set_personality(ROOM, "嘴臭")
+        self.assertEqual(self.store.voice_selection(ROOM).voice_id, "b" * 32)
+        self.store.set_personality(ROOM, "瑶")
+        self.assertEqual(self.store.voice_selection(ROOM).voice_id, "a" * 32)
+        self.assertTrue(self.store.voice_selection(ROOM).enabled)
+        prepare_switch(self.message("/切换人格 取消"), self.store)
+        self.assertEqual(self.store.voice_selection(ROOM).voice_id, "a" * 32)
+
     def test_personality_persists_and_isolated_from_other_groups_accounts_and_clear(self):
         state = self.store.set_personality(ROOM, "嘴臭")
         self.assertEqual(self.store.personality(OTHER_ROOM).name, "默认")

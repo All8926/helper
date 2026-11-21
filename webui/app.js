@@ -484,6 +484,7 @@ function syncRoomBehavior() {
     personalityItems = (config?.personalities || []).map(item => ({
       name: item.name,
       layers: emptyLayers(item.layers),
+      voice: item.voice || '',
       previous: item.name
     }));
     $('#global-prompt').value = config?.global_prompt || '';
@@ -646,6 +647,23 @@ function emptyLayers(source) {
 function personalityLayer(item) {
   return personalityLayers.includes(item.activeLayer) ? item.activeLayer : personalityLayers[0];
 }
+function personalityVoiceChoices() {
+  const items = voiceLibraryDirty ? voiceLibraryItems : voiceLibraryEntries();
+  return items.filter(item => item.name && item.name.trim() && item.voice_id);
+}
+function personalityVoiceEntry(name) {
+  if (!name || name === '默认') return null;
+  const personality = personalityItems.find(item => item.name === name)
+    || (config?.personalities || []).find(item => item.name === name);
+  if (!personality?.voice) return null;
+  return personalityVoiceChoices().find(item => item.name.trim() === personality.voice) || null;
+}
+function applyPersonalityVoice(voiceIdInput, librarySelect, name) {
+  const entry = personalityVoiceEntry(name);
+  if (!entry || !voiceIdInput) return;
+  voiceIdInput.value = entry.voice_id;
+  syncVoiceLibrarySelect(librarySelect, entry.voice_id);
+}
 function paintPersonalities() {
   $('#personality-list').innerHTML = personalityItems.length ? personalityItems.map((item, index) => {
     const layers = emptyLayers(item.layers);
@@ -660,7 +678,14 @@ function paintPersonalities() {
       const selected = name === active;
       return `<div class="personality-panel${selected ? '' : ' hidden'}" role="tabpanel" id="personality-${index}-panel-${layerIndex}" aria-labelledby="personality-${index}-tab-${layerIndex}" data-personality-panel="${escape(name)}"><textarea data-personality-layer="${escape(name)}" rows="12" spellcheck="false" placeholder="${escape(personalityHints[name])}">${escape(layers[name])}</textarea></div>`;
     }).join('');
-    return `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><div class="editor-tabs personality-tabs" role="tablist" aria-label="人格层面">${tabs}</div>${panels}</div>`;
+    const open = item.open === true;
+    const voices = personalityVoiceChoices();
+    const voiceNames = voices.map(entry => entry.name.trim());
+    const voice = item.voice || '';
+    const voiceOptions = [`<option value=""${voice ? '' : ' selected'}>不绑定</option>`].concat(voiceNames.map(entry =>
+      `<option value="${escape(entry)}"${entry === voice ? ' selected' : ''}>${escape(entry)}</option>`));
+    if (voice && !voiceNames.includes(voice)) voiceOptions.push(`<option value="${escape(voice)}" selected>${escape(voice)}</option>`);
+    return `<div class="personality-card${open ? ' is-open' : ''}" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false" placeholder="未命名"></label><button type="button" class="text-button" data-personality-toggle aria-expanded="${open}">${open ? '收起' : '展开'}</button><button type="button" class="text-button" data-personality-remove>删除</button></div><div class="personality-body${open ? '' : ' hidden'}"><label class="personality-voice">音色<select data-personality-voice>${voiceOptions.join('')}</select></label><div class="editor-tabs personality-tabs" role="tablist" aria-label="人格层面">${tabs}</div>${panels}</div></div>`;
   }).join('') : '<p class="section-description">还没有人格。添加后按层面填写，空着的层不会发给模型。</p>';
 }
 function selectPersonalityTab(tab) {
@@ -760,6 +785,10 @@ for (const id of groupsTabIds) {
   };
 }
 for (const id of ['behavior-admins', 'behavior-aliases', 'behavior-personality', 'behavior-hours', 'behavior-limit', 'behavior-unnamed', 'behavior-glance', 'behavior-hourly', 'behavior-speak', 'behavior-voice', 'behavior-voice-threshold', 'behavior-sing', 'behavior-voice-library', 'behavior-voice-id', 'behavior-thinking', 'behavior-welcome', 'behavior-leave', 'behavior-welcome-switch', 'behavior-leave-switch']) $('#'+id).oninput = () => { behaviorDirty = true; };
+$('#behavior-personality').addEventListener('change', () => {
+  behaviorDirty = true;
+  applyPersonalityVoice($('#behavior-voice-id'), $('#behavior-voice-library'), $('#behavior-personality').value);
+});
 $('#behavior-voice-library').onchange = () => {
   const item = voiceLibraryEntries().find(entry => entry.name === $('#behavior-voice-library').value);
   if (item) $('#behavior-voice-id').value = item.voice_id;
@@ -812,7 +841,7 @@ $('#behavior-form').onsubmit = event => {
 $('#global-prompt').oninput = () => { personalityDirty = true; };
 $('#reply-limit').oninput = () => { personalityDirty = true; };
 $('#personality-add').onclick = () => {
-  personalityItems.push({name: '', layers: emptyLayers(), previous: '', activeLayer: personalityLayers[0]});
+  personalityItems.push({name: '', layers: emptyLayers(), voice: '', previous: '', activeLayer: personalityLayers[0], open: true});
   personalityDirty = true;
   paintPersonalities();
 };
@@ -821,6 +850,7 @@ $('#personality-list').oninput = event => {
   if (!card) return;
   const item = personalityItems[Number(card.dataset.index)];
   if (event.target.matches('[data-personality-name]')) item.name = event.target.value;
+  if (event.target.matches('[data-personality-voice]')) item.voice = event.target.value;
   if (event.target.matches('[data-personality-layer]')) {
     const name = event.target.dataset.personalityLayer;
     item.layers = emptyLayers(item.layers);
@@ -837,6 +867,17 @@ $('#personality-list').onclick = event => {
     personalityItems.splice(Number(remove.closest('[data-index]').dataset.index), 1);
     personalityDirty = true;
     paintPersonalities();
+    return;
+  }
+  const toggle = event.target.closest('[data-personality-toggle]');
+  if (toggle) {
+    const card = toggle.closest('[data-index]');
+    const item = personalityItems[Number(card.dataset.index)];
+    item.open = item.open !== true;
+    card.classList.toggle('is-open', item.open);
+    card.querySelector('.personality-body').classList.toggle('hidden', !item.open);
+    toggle.textContent = item.open ? '收起' : '展开';
+    toggle.setAttribute('aria-expanded', String(item.open));
     return;
   }
   const tab = event.target.closest('[data-personality-tab]');
@@ -859,7 +900,7 @@ $('#personality-form').onsubmit = event => {
     const typedLimit = $('#reply-limit').value.trim();
     const replyLimit = typedLimit === '' ? 600 : contextNumber(typedLimit, null);
     if (!Number.isInteger(replyLimit) || replyLimit < 1 || replyLimit > 8000) throw new Error('回复字数上限应为 1–8000 的整数');
-    config = await api('room-behavior', {global_prompt: $('#global-prompt').value, reply_limit: replyLimit, personalities: personalityItems.map(item => ({name: item.name.trim(), layers: emptyLayers(item.layers), previous: item.previous || ''}))});
+    config = await api('room-behavior', {global_prompt: $('#global-prompt').value, reply_limit: replyLimit, personalities: personalityItems.map(item => ({name: item.name.trim(), layers: emptyLayers(item.layers), voice: (item.voice || '').trim(), previous: item.previous || ''}))});
     personalityDirty = false;
     syncRoomBehavior();
     toast('人格提示词已生效');
@@ -1044,6 +1085,10 @@ $('#private-fields').oninput=event=>{
   if(event.target.id==='private-voice'){
     const label=document.querySelector(`[data-private-id="${CSS.escape(privateSelected)}"] > small`);
     if(label)label.textContent=privateVoiceLabel(event.target.value);
+  }
+  if(event.target.id==='private-personality'){
+    applyPersonalityVoice($('#private-voice-id'), $('#private-voice-library'), event.target.value);
+    readPrivateEditor();
   }
   if(event.target.id==='private-voice-library'){
     const item=voiceLibraryEntries().find(entry=>entry.name===event.target.value);

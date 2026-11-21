@@ -120,6 +120,25 @@ class PrivateStoreTests(PrivateFixture, unittest.TestCase):
         with self.assertRaises(BehaviorError):
             self.store.apply_private_chat({"contacts": [ROOM]})
 
+    def test_private_personality_fills_its_voice_unless_the_voice_was_changed(self):
+        self.store.apply_voice_library([{"name": "瑶音", "voice_id": "a" * 32}])
+        self.store.apply_personalities([
+            {"name": "瑶", "layers": {"声口": "软。"}, "voice": "瑶音", "previous": "瑶"},
+            {"name": "嘴臭", "layers": {"声口": "短。"}, "previous": "嘴臭"},
+        ])
+        saved = self.store.apply_private_chat({
+            "contacts": [FRIEND], "context_hours": 12, "context_limit": 40,
+            "people": {FRIEND: {"personality": "瑶", "voice_mode": "always", "voice_id": ""}}})
+        self.assertEqual(saved["people"][FRIEND]["voice_id"], "a" * 32)
+        unchanged = self.store.apply_private_chat({
+            "contacts": [FRIEND], "context_hours": 12, "context_limit": 40,
+            "people": {FRIEND: {"personality": "嘴臭", "voice_mode": "always", "voice_id": "a" * 32}}})
+        self.assertEqual(unchanged["people"][FRIEND]["voice_id"], "a" * 32)
+        kept = self.store.apply_private_chat({
+            "contacts": [FRIEND], "context_hours": 12, "context_limit": 40,
+            "people": {FRIEND: {"personality": "嘴臭", "voice_mode": "always", "voice_id": "b" * 32}}})
+        self.assertEqual(kept["people"][FRIEND]["voice_id"], "b" * 32)
+
     def test_snapshot_uses_configured_name_then_wechat_nickname(self):
         self.store.record(self.message())
         named = self.store.conversation_snapshot(self.message())

@@ -192,7 +192,7 @@
     <div id="groups-panel-persona" class="hidden" role="tabpanel" aria-labelledby="groups-tab-persona">
         <form id="personality-form" class="settings-section">
           <div class="section-heading"><h2>人格库</h2><button id="personality-add" class="secondary small" type="button">添加人格</button></div>
-          <p class="section-description">每个群或每个私聊选用一份人格。点层面标签填写，一次只编辑一层；标签上的圆点表示这一层已经写了内容。空着的层不会发给模型。选中人格后，对话不再附加全局提示词。没选人格时，对话只用全局提示词。超过字数上限的回复会截短后发出。总结和接龙不使用这些层面。</p>
+          <p class="section-description">每个群或每个私聊选用一份人格。人格默认收起，点「展开」再编辑。展开后可以给这份人格选一个音色库里的音色，切换到它时会自动换成这个音色；留空则不改当前音色。层面标签一次只显示一层，圆点表示这一层已经写了内容。空着的层不会发给模型。选中人格后，对话不再附加全局提示词。没选人格时，对话只用全局提示词。超过字数上限的回复会截短后发出。总结和接龙不使用这些层面。</p>
           <label for="global-prompt">全局提示词</label>
           <textarea id="global-prompt" rows="8" spellcheck="false" placeholder="留空则不附加任务说明"></textarea>
           <label for="reply-limit">回复字数上限<input id="reply-limit" type="number" min="1" max="8000" step="1" value="600"></label>

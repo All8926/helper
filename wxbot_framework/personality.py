@@ -132,9 +132,11 @@ def prepare_switch(message, store):
     return replace(message, data=MappingProxyType(data))
 
 
-def switch_ack(name):
+def switch_ack(name, voice=""):
     if name == "默认":
         return "已取消人格，恢复正常回复。"
+    if voice:
+        return f"已切换：{name}。音色已换成{voice}。"
     return f"已切换：{name}。"
 
 

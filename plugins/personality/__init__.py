@@ -16,7 +16,11 @@ class Plugin:
         if state is None:
             return
         try:
-            ctx.reply(message, switch_ack(state.name), delivery_guard=lambda: ctx.personality_guard(state))
+            voice = ""
+            matched = next((item for item in self.members.personalities if item["name"] == state.name), None)
+            if matched and self.members._personality_voice(state.name) is not None:
+                voice = matched.get("voice") or ""
+            ctx.reply(message, switch_ack(state.name, voice), delivery_guard=lambda: ctx.personality_guard(state))
             ctx.logger.info("人格已切换：room=%s name=%s", state.room, state.name)
         except SnapshotExpired:
             pass

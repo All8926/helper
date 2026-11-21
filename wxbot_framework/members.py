@@ -559,6 +559,7 @@ class MemberStore:
             result = self.personality(room)
             if mirror:
                 self._mirror_personality(room, result.name)
+            self._use_personality_voice(room, result.name)
             return result
 
     def update_behavior(self, data):
@@ -702,6 +703,7 @@ class MemberStore:
             raise MemberError("不能把机器人自己加入私聊名单")
         with self._lock:
             previous = self.private_chat
+            self._fill_private_personality_voices(cleaned, previous)
             self.private_chat = cleaned
             self.private_contacts = set(cleaned["contacts"])
             try:
@@ -834,6 +836,45 @@ class MemberStore:
         if not VOICE_ID.fullmatch(chosen):
             raise MemberError(VOICE_ID_HINT)
         return self.set_voice(room, chosen, self._voice_label(chosen, current), enabled=True, mode=mode)
+
+    def _personality_voice(self, name):
+        """人格绑定的音色库条目。没绑、或音色库里已经没有这个名称时，返回空。"""
+        if not name or name == RESERVED_PERSONALITY:
+            return None
+        voice = ""
+        for item in self.personalities:
+            if item["name"] == name:
+                voice = item.get("voice") or ""
+                break
+        if not voice:
+            return None
+        for item in self.voice_library:
+            if item["name"] == voice:
+                return item
+        return None
+
+    def _use_personality_voice(self, room, name):
+        """群切换到这份人格时，换成它绑定的音色。没绑定则保持当前音色。"""
+        chosen = self._personality_voice(name)
+        if chosen is None or room not in self.groups:
+            return
+        current = self.voice_selection(room)
+        mode = current.mode if current.mode in ("always", "auto") else "always"
+        was_off = not current.enabled
+        self.set_voice(room, chosen["voice_id"], chosen["name"], enabled=True, mode=mode)
+        if was_off:
+            self.set_voice(room, "", "", enabled=False)
+
+    def _fill_private_personality_voices(self, cleaned, previous):
+        """私聊换了人格、又没另外改音色时，用这份人格绑定的音色。"""
+        old_people = (previous or {}).get("people") or {}
+        for wxid, person in cleaned["people"].items():
+            old = old_people.get(wxid) or {}
+            if person["personality"] == (old.get("personality") or RESERVED_PERSONALITY):
+                continue
+            chosen = self._personality_voice(person["personality"])
+            if chosen is not None and person.get("voice_id", "") == (old.get("voice_id") or ""):
+                person["voice_id"] = chosen["voice_id"]
 
     def _voice_label(self, voice_id, current):
         """音色库里只有一个名称对上这个 ID 时，页面保存就用这个名称。"""

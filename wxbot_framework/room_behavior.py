@@ -70,6 +70,11 @@ def normalize_personalities(raw):
             if len(text) > MAX_LAYER:
                 raise BehaviorError(f"{name}的{key}不超过 {MAX_LAYER} 字")
             layers[key] = text
+        voice = item.get("voice", "")
+        if voice is None:
+            voice = ""
+        if not isinstance(voice, str) or (voice.strip() and not PERSONALITY_NAME.fullmatch(voice.strip())):
+            raise BehaviorError("人格音色应留空，或选择音色库里的名称")
         if name in seen:
             raise BehaviorError(f"人格名称重复：{name}")
         previous = item.get("previous", name)
@@ -78,12 +83,12 @@ def normalize_personalities(raw):
         if not isinstance(previous, str) or len(previous) > 16:
             raise BehaviorError("原人格名称无效")
         seen.add(name)
-        result.append({"name": name, "layers": layers, "previous": previous.strip()})
+        result.append({"name": name, "layers": layers, "voice": voice.strip(), "previous": previous.strip()})
     return result
 
 
 def public_personalities(items):
-    return [{"name": item["name"], "layers": dict(item["layers"])} for item in items]
+    return [{"name": item["name"], "layers": dict(item["layers"]), "voice": item.get("voice", "")} for item in items]
 
 
 def normalize_voice_library(raw):
