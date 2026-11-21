@@ -17,7 +17,7 @@ from .plugins import PluginManager
 from .sdk import Message, ServiceFacade
 from .members import MemberStore
 from .personality import prepare_switch
-from .room_behavior import chat_switch, command_blocked
+from .room_behavior import chat_switch, command_blocked, speak_activity
 
 logger = logging.getLogger("Bot")
 
@@ -267,6 +267,9 @@ class BotApplication:
                         switch = chat_switch(message.text)
                         if switch is not None:
                             self._switch_mention_chat(message, switch)
+                        activity = speak_activity(message.text)
+                        if activity is not None:
+                            self._set_speak_activity(message, activity)
                     disabled = self.members.disabled_plugins(message.chat_id) if group and self.members is not None else frozenset()
                     if self.plugins.is_active("personality") and "personality" not in disabled:
                         message = prepare_switch(message, self.members)
@@ -289,6 +292,20 @@ class BotApplication:
             self._reply_command(message, "暂时没能切换本群的对话功能。")
             return
         self._reply_command(message, "已开启本群的对话功能。" if enabled else "已关闭本群的对话功能。")
+
+    def _set_speak_activity(self, message, value):
+        """把本群说话门槛改成指令里的活跃度。不合法时只回复范围。"""
+        if value is False:
+            self._reply_command(message, "活跃值范围为0~1")
+            return
+        try:
+            saved = self.members.set_speak_threshold(message.chat_id, value)
+        except Exception:
+            logger.exception("本群说话门槛未写入")
+            self._reply_command(message, "暂时没能设置本群的对话活跃度。")
+            return
+        shown = f"{saved:.2f}".rstrip("0").rstrip(".")
+        self._reply_command(message, f"本群对话活跃度已设为 {shown}。")
 
     def _reply_command(self, message, text):
         room, session = message.chat_id, message.session_id

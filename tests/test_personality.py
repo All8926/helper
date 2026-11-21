@@ -17,7 +17,7 @@ from wxbot_framework.mentions import parse_at_members, strip_at_labels
 from wxbot_framework.personality import PROMPTS, PersonalityExpired, PersonalityState, prepare_switch, game_reply
 from wxbot_framework.runtime import BotApplication
 from wxbot_framework.sdk import Message
-from wxbot_framework.text import TextRouter
+from wxbot_framework.text import TextRouter, own_group_command
 
 ROOM, CAT, ROBOT, OTHER_ROOM, OTHER = daily.ROOM, daily.CAT, daily.ROBOT, daily.OTHER_ROOM, daily.OTHER
 
@@ -157,6 +157,41 @@ class PersonalityTests(unittest.TestCase):
         run("/开启对话")
         self.assertEqual(sent[-1][1], "艾特对话在插件管理里是停用的，请先在后台打开。")
         self.assertNotIn("mention_chat", self.store.disabled_plugins(ROOM))
+
+    def test_speak_activity_command_sets_one_room_threshold(self):
+        app = object.__new__(BotApplication)
+        sent = []
+        app.config, app.members = {"chat_allowlist": []}, self.store
+        app.plugins = Mock()
+        app.plugins.is_active.return_value = True
+        app.service = Mock()
+        app.service.send_text.side_effect = lambda room, text, **_kwargs: sent.append((room, text))
+        self.store.room_settings[ROOM] = {"admins": [CAT], "aliases": ["小助手"], "personality": "默认"}
+
+        def run(text, sender=CAT):
+            with patch("wxbot_framework.runtime.threading.Thread") as thread:
+                thread.side_effect = lambda *args, **kwargs: Mock(start=lambda: kwargs["target"]())
+                app._emit(self.message(text, sender=sender))
+
+        run("/对话活跃度 2")
+        self.assertEqual(sent[-1][1], "活跃值范围为0~1")
+        self.assertEqual(self.store.room_speak_threshold(ROOM), 0.5)
+        run("/对话活跃度")
+        self.assertEqual(sent[-1][1], "活跃值范围为0~1")
+        run("/对话活跃度 0.8", sender=OTHER)
+        self.assertEqual(sent[-1][1], "只有管理员可以使用这个指令。")
+        self.assertEqual(self.store.room_speak_threshold(ROOM), 0.5)
+        run("/对话活跃度 0.8")
+        self.assertEqual(sent[-1][1], "本群对话活跃度已设为 0.8。")
+        self.assertEqual(self.store.room_speak_threshold(ROOM), 0.8)
+        self.assertEqual(self.store.room_aliases(ROOM), ("小助手",))
+        self.assertEqual(self.new_store().room_speak_threshold(ROOM), 0.8)
+        self.assertEqual(self.store.room_speak_threshold(OTHER_ROOM), 0.5)
+        run("/对话活跃度 0")
+        self.assertEqual(self.store.room_speak_threshold(ROOM), 0)
+        run("/对话活跃度 1")
+        self.assertEqual(sent[-1][1], "本群对话活跃度已设为 1。")
+        self.assertTrue(own_group_command("/对话活跃度 0.8"))
 
     def test_missing_or_unknown_switch_returns_usage_without_changing_persona(self):
         plugin = PersonalityPlugin()

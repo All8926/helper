@@ -490,6 +490,24 @@ def chat_switch(text):
     return None
 
 
+_ACTIVITY_NUMBER = re.compile(r"^(?:0(?:\.\d+)?|1(?:\.0+)?)$")
+
+
+def speak_activity(text):
+    """解析 /对话活跃度。不是这条指令时返回 None，数值不在 0–1 时返回 False。"""
+    if not isinstance(text, str):
+        return None
+    parts = text.strip().split()
+    if not parts or parts[0] != "/对话活跃度":
+        return None
+    if len(parts) != 2 or _ACTIVITY_NUMBER.fullmatch(parts[1]) is None:
+        return False
+    value = float(parts[1])
+    if value != value or not 0 <= value <= 1:
+        return False
+    return round(value, 2)
+
+
 def command_blocked(store, message):
     if (store is None or message.type != 1 or not message.is_group or
             message.chat_id not in store.groups or message.data.get("bot_generated") or

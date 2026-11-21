@@ -518,6 +518,18 @@ class MemberStore:
             self.apply_room(room, current)
             return plugin not in self.disabled_plugins(room)
 
+    def set_speak_threshold(self, room, value):
+        """按群保存说话门槛，并立刻作用于未点名回应。"""
+        from .room_behavior import normalize_speak_threshold
+        threshold = normalize_speak_threshold(value)
+        if room not in self.groups:
+            raise MemberError("请在已配置的群中设置说话门槛")
+        with self._lock:
+            current = dict(self.room_settings.get(room) or {})
+            current["speak_threshold"] = threshold
+            self.apply_room(room, current)
+            return self.room_speak_threshold(room)
+
     def plugin_options(self, room, name):
         """这个群单独改过的插件选项。没改过的项不在这里，调用方继续用账号配置。"""
         with self._lock:
