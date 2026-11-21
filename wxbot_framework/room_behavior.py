@@ -13,9 +13,9 @@ from .account import validate_account
 RESERVED_PERSONALITY = "默认"
 MAX_ADMINS = 32
 MAX_ALIASES = 8
-MAX_PERSONALITIES = 12
+MAX_PERSONALITIES = 128
+MAX_LAYER = 2000
 MAX_VOICE_LIBRARY = 24
-MAX_PROMPT = 8000
 DEFAULT_CONTEXT_HOURS = 6
 DEFAULT_CONTEXT_LIMIT = 300
 MAX_CONTEXT_HOURS = 168
@@ -37,30 +37,39 @@ class BehaviorError(ValueError):
     pass
 
 
-def default_personalities():
-    from .personality import PROMPTS
-    return [{"name": name, "prompt": text, "previous": name} for name, text in PROMPTS.items()]
-
-
 def normalize_personalities(raw):
-    """整理人格库。未配置时使用内置的嘴臭、卑微、夸夸。"""
+    """整理人格库。没有配置就是空的，不预置任何人格。旧的整段提示词直接丢掉。"""
+    from .personality import LAYER_NAMES
     if raw is None:
-        return default_personalities()
+        return []
     if not isinstance(raw, list) or len(raw) > MAX_PERSONALITIES:
-        raise BehaviorError("人格最多 12 份")
+        raise BehaviorError(f"人格最多 {MAX_PERSONALITIES} 份")
     result, seen = [], set()
     for item in raw:
-        if not isinstance(item, dict):
-            raise BehaviorError("人格应为名称和提示词")
+        if not isinstance(item, dict) or "layers" not in item:
+            continue
         name = item.get("name")
-        prompt = item.get("prompt")
         if not isinstance(name, str) or not PERSONALITY_NAME.fullmatch(name.strip()):
             raise BehaviorError("人格名称应为 1–16 个汉字、字母或数字")
         name = name.strip()
         if name == RESERVED_PERSONALITY:
             raise BehaviorError("「默认」表示不使用人格，不能作为人格名称")
-        if not isinstance(prompt, str) or not prompt.strip() or len(prompt.strip()) > MAX_PROMPT:
-            raise BehaviorError("人格提示词不能为空，且不超过 8000 字")
+        raw_layers = item.get("layers")
+        if not isinstance(raw_layers, dict):
+            raise BehaviorError("人格层面应为文本")
+        if set(raw_layers) - set(LAYER_NAMES):
+            raise BehaviorError("人格层面名称无效")
+        layers = {}
+        for key in LAYER_NAMES:
+            value = raw_layers.get(key, "")
+            if value is None:
+                value = ""
+            if not isinstance(value, str) or "\0" in value:
+                raise BehaviorError(f"{name}的{key}应为文本")
+            text = value.strip()
+            if len(text) > MAX_LAYER:
+                raise BehaviorError(f"{name}的{key}不超过 {MAX_LAYER} 字")
+            layers[key] = text
         if name in seen:
             raise BehaviorError(f"人格名称重复：{name}")
         previous = item.get("previous", name)
@@ -69,12 +78,12 @@ def normalize_personalities(raw):
         if not isinstance(previous, str) or len(previous) > 16:
             raise BehaviorError("原人格名称无效")
         seen.add(name)
-        result.append({"name": name, "prompt": prompt.strip(), "previous": previous.strip()})
+        result.append({"name": name, "layers": layers, "previous": previous.strip()})
     return result
 
 
 def public_personalities(items):
-    return [{"name": item["name"], "prompt": item["prompt"]} for item in items]
+    return [{"name": item["name"], "layers": dict(item["layers"])} for item in items]
 
 
 def normalize_voice_library(raw):
@@ -434,13 +443,13 @@ def normalize_private_chat(value, personality_names, *, fallback=False):
 
 
 def view_behavior(options):
-    """给管理台的人格库和各群行为。配置缺失时补上内置人格。"""
+    """给管理台的人格库和各群行为。没配人格就是空库。"""
     if not isinstance(options, dict):
         options = {}
     try:
         items = normalize_personalities(options["personalities"] if "personalities" in options else None)
     except (BehaviorError, TypeError, KeyError):
-        items = default_personalities()
+        items = []
     settings = options.get("room_settings")
     try:
         guard = normalize_global_prompt(options["global_prompt"] if "global_prompt" in options else None)

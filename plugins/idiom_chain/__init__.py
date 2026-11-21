@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import SnapshotExpired
-from wxbot_framework.personality import game_reply, personality_text
+from wxbot_framework.personality import game_reply
 from wxbot_framework.text import GROUP_CONTROL_COMMANDS, FOUR_CHINESE, validate_mentions
 from .judge import IdiomJudge
 
@@ -118,9 +118,7 @@ class Plugin:
             verdict = judge.evaluate(chain.current, text, chain.used)
         except LLMError as error:
             ctx.logger.warning("接龙判定失败：%s", error)
-            response = (personality_text(f"暂时判不了，仍接{chain.current}。", personality.name)
-                        if personality.name == "嘴臭" else
-                        f"大模型暂时无法判定，请稍后重试。当前成语：{chain.current}")
+            response = f"大模型暂时无法判定，请稍后重试。当前成语：{chain.current}"
             accepted = False
             following, used = chain.current, chain.used
         else:

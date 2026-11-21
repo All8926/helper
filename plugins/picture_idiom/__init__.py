@@ -10,7 +10,6 @@ import random
 import time
 
 from wxbot_framework.members import SnapshotExpired
-from wxbot_framework.personality import personality_text
 from wxbot_framework.text import FOUR_CHINESE
 from .bank import PUZZLES, Puzzle
 from .render import CardRenderer
@@ -108,15 +107,13 @@ class Plugin:
         return True
 
     @staticmethod
-    def _feedback(puzzle, personality, *, correct=False):
+    def _feedback(puzzle, *, correct=False):
         if correct:
-            prefix = {'嘴臭': '总算猜对了：', '卑微': '爷，您猜对了：', '夸夸': '眼力真棒，答对了：'}.get(personality.name, '答对了：')
-            return personality_text(prefix + puzzle.answer + '。', personality.name)
-        prefix = {'嘴臭': '看清了，答案：', '卑微': '爷，小的揭晓答案：', '夸夸': '揭晓啦，答案：'}.get(personality.name, '答案：')
-        text = prefix + puzzle.answer + '。'
-        if personality.name != '嘴臭' and puzzle.explanation:
-            text += '\n' + puzzle.explanation
-        return personality_text(text, personality.name)
+            return f"答对了：{puzzle.answer}。"
+        text = f"答案：{puzzle.answer}。"
+        if puzzle.explanation:
+            text += "\n" + puzzle.explanation
+        return text
 
     def on_message(self, message, ctx):
         if (message.type != 1 or not message.is_group or message.chat_id not in self.members.groups or
@@ -157,7 +154,7 @@ class Plugin:
             if game.current is not None:
                 personality = ctx.personality(message)
                 try:
-                    sent = ctx.reply(message, self._feedback(game.current, personality),
+                    sent = ctx.reply(message, self._feedback(game.current),
                                      delivery_guard=lambda: ctx.personality_guard(personality))
                 except SnapshotExpired:
                     return
@@ -180,7 +177,7 @@ class Plugin:
                     game.hint_index += 1
                 return
             if text == '公布答案':
-                if ctx.reply(message, self._feedback(game.current, personality), delivery_guard=guard):
+                if ctx.reply(message, self._feedback(game.current), delivery_guard=guard):
                     game.current = None
                     self._question(message, ctx, game)
                 return
@@ -196,12 +193,11 @@ class Plugin:
                 return
             if candidate != game.current.answer:
                 if time.monotonic() - game.last_wrong >= self.cooldown:
-                    feedback = {'嘴臭': '这都没猜中？再看图。', '卑微': '爷，是小的图没画好，再瞧瞧？',
-                                '夸夸': '思路不错，再观察一下！'}.get(personality.name, '还没猜中，再看看图；也可以发送“提示”。')
+                    feedback = "还没猜中，再看看图；也可以发送“提示”。"
                     if ctx.reply_at(message, feedback, delivery_guard=guard):
                         game.last_wrong = time.monotonic()
                 return
-            if ctx.reply_at(message, self._feedback(game.current, personality, correct=True), delivery_guard=guard):
+            if ctx.reply_at(message, self._feedback(game.current, correct=True), delivery_guard=guard):
                 game.current = None
                 self._question(message, ctx, game)
         except SnapshotExpired:

@@ -38,6 +38,10 @@ class SpeechTests(unittest.TestCase):
         with patch('wxbot_framework.speech.open_tts', return_value=self.client):
             self.speech.reload()
         self.ctx._speech = self.speech
+        self.store.apply_personalities([
+            {"name": "卑微", "layers": {"声口": "让。"}, "previous": "卑微"},
+            {"name": "夸夸", "layers": {"声口": "夸。"}, "previous": "夸夸"},
+        ])
         self.voice_paths = []
 
         def send_voice(room, path):

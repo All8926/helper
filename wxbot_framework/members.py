@@ -488,7 +488,7 @@ class MemberStore:
         return tuple(item["name"] for item in self.personalities)
 
     def prompts(self):
-        return {item["name"]: item["prompt"] for item in self.personalities}
+        return {item["name"]: item["layers"] for item in self.personalities}
 
     def room_admins(self, room):
         with self._lock:
@@ -584,7 +584,7 @@ class MemberStore:
     def apply_personalities(self, raw):
         items = normalize_personalities(raw)
         with self._lock:
-            old = {item["name"]: item["prompt"] for item in self.personalities}
+            old = {item["name"]: item["layers"] for item in self.personalities}
             for item in items:
                 previous = item["previous"]
                 source = previous or item["name"]
@@ -592,7 +592,7 @@ class MemberStore:
                     if previous not in old:
                         raise MemberError(f"找不到要改名的人格：{previous}")
                     self._rename_personality(previous, item["name"])
-                if old.get(source) not in (None, item["prompt"]):
+                if old.get(source) not in (None, item["layers"]):
                     self._bump_personality(item["name"])
             new_names = {item["name"] for item in items}
             for room in self.groups:

@@ -481,7 +481,11 @@ function syncRoomBehavior() {
   paintBehaviorRooms();
   fillPersonalityChoices();
   if (!personalityDirty) {
-    personalityItems = (config?.personalities || []).map(item => ({name: item.name, prompt: item.prompt, previous: item.name}));
+    personalityItems = (config?.personalities || []).map(item => ({
+      name: item.name,
+      layers: emptyLayers(item.layers),
+      previous: item.name
+    }));
     $('#global-prompt').value = config?.global_prompt || '';
     $('#reply-limit').value = Number.isInteger(config?.reply_limit) ? config.reply_limit : 600;
     paintPersonalities();
@@ -623,10 +627,19 @@ function paintVoiceLibrary() {
     `<div class="voice-row" data-index="${index}"><label>名称<input data-voice-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><label>音色 ID<input data-voice-id value="${escape(item.voice_id)}" spellcheck="false" autocomplete="off" placeholder="音色 ID"></label><button type="button" class="text-button" data-voice-remove>删除</button></div>`).join('')
     : '<p class="section-description">还没有音色。添加名称和音色 ID 后，群里就可以用 /切换音色 名称。</p>';
 }
+const personalityLayers = ['身份', '处境', '声口', '性情', '欲求与底线', '关系', '矛盾', '盲区'];
+function emptyLayers(source) {
+  const layers = {};
+  for (const name of personalityLayers) layers[name] = source?.[name] || '';
+  return layers;
+}
 function paintPersonalities() {
-  $('#personality-list').innerHTML = personalityItems.length ? personalityItems.map((item, index) =>
-    `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><label>提示词<textarea data-personality-prompt rows="10" spellcheck="false">${escape(item.prompt)}</textarea></label></div>`).join('')
-    : '<p class="section-description">还没有人格。未保存过时会使用内置的嘴臭、卑微和夸夸。</p>';
+  $('#personality-list').innerHTML = personalityItems.length ? personalityItems.map((item, index) => {
+    const layers = emptyLayers(item.layers);
+    const fields = personalityLayers.map(name =>
+      `<label>${escape(name)}<textarea data-personality-layer="${escape(name)}" rows="4" spellcheck="false">${escape(layers[name])}</textarea></label>`).join('');
+    return `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><div class="personality-layers">${fields}</div></div>`;
+  }).join('') : '<p class="section-description">还没有人格。添加后填写用到的层面，空着的层不会发给模型。</p>';
 }
 function syncMemberToggle() {
   const button = $('#behavior-members-toggle');
@@ -763,7 +776,7 @@ $('#behavior-form').onsubmit = event => {
 $('#global-prompt').oninput = () => { personalityDirty = true; };
 $('#reply-limit').oninput = () => { personalityDirty = true; };
 $('#personality-add').onclick = () => {
-  personalityItems.push({name: '', prompt: '', previous: ''});
+  personalityItems.push({name: '', layers: emptyLayers(), previous: ''});
   personalityDirty = true;
   paintPersonalities();
 };
@@ -772,7 +785,10 @@ $('#personality-list').oninput = event => {
   if (!card) return;
   const item = personalityItems[Number(card.dataset.index)];
   if (event.target.matches('[data-personality-name]')) item.name = event.target.value;
-  if (event.target.matches('[data-personality-prompt]')) item.prompt = event.target.value;
+  if (event.target.matches('[data-personality-layer]')) {
+    item.layers = emptyLayers(item.layers);
+    item.layers[event.target.dataset.personalityLayer] = event.target.value;
+  }
   personalityDirty = true;
 };
 $('#personality-list').onclick = event => {
@@ -788,7 +804,7 @@ $('#personality-form').onsubmit = event => {
     const typedLimit = $('#reply-limit').value.trim();
     const replyLimit = typedLimit === '' ? 600 : contextNumber(typedLimit, null);
     if (!Number.isInteger(replyLimit) || replyLimit < 1 || replyLimit > 8000) throw new Error('回复字数上限应为 1–8000 的整数');
-    config = await api('room-behavior', {global_prompt: $('#global-prompt').value, reply_limit: replyLimit, personalities: personalityItems.map(item => ({name: item.name.trim(), prompt: item.prompt.trim(), previous: item.previous || ''}))});
+    config = await api('room-behavior', {global_prompt: $('#global-prompt').value, reply_limit: replyLimit, personalities: personalityItems.map(item => ({name: item.name.trim(), layers: emptyLayers(item.layers), previous: item.previous || ''}))});
     personalityDirty = false;
     syncRoomBehavior();
     toast('人格提示词已生效');

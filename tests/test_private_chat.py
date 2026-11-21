@@ -13,7 +13,7 @@ from plugins.private_chat import Plugin
 from test_web_panel import PanelFixture
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import MemberError, MemberStore
-from wxbot_framework.personality import PROMPTS, PersonalityLLM
+from wxbot_framework.personality import PersonalityLLM
 from wxbot_framework.room_behavior import BehaviorError
 from wxbot_framework.sdk import Message
 
@@ -67,6 +67,10 @@ class PrivateStoreTests(PrivateFixture, unittest.TestCase):
 
     def test_shared_personality_changes_generation_and_rejects_non_contacts(self):
         self.assertEqual(self.store.private_context_window(), (12, 40))
+        self.store.apply_personalities([
+            {"name": name, "layers": {"声口": "短。"}, "previous": name}
+            for name in ("嘴臭", "卑微", "夸夸")
+        ])
         first = self.store.private_personality(FRIEND)
         self.store.apply_private_chat({
             "contacts": [FRIEND], "context_hours": 12, "context_limit": 40, "personality": "嘴臭"})
@@ -78,8 +82,8 @@ class PrivateStoreTests(PrivateFixture, unittest.TestCase):
         self.assertEqual(self.store.private_personality(FRIEND).generation, chosen.generation)
         self.assertEqual(again["names"], {})
         self.store.apply_personalities([
-            {"name": "卑微", "prompt": PROMPTS["卑微"], "previous": "卑微"},
-            {"name": "夸夸", "prompt": PROMPTS["夸夸"], "previous": "夸夸"},
+            {"name": "卑微", "layers": {"声口": "让。"}, "previous": "卑微"},
+            {"name": "夸夸", "layers": {"声口": "夸。"}, "previous": "夸夸"},
         ])
         reset = self.store.private_personality(FRIEND)
         self.assertEqual(reset.name, "默认")

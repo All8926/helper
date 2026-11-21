@@ -14,7 +14,7 @@ from plugins.idiom_chain import Plugin as IdiomPlugin
 from wxbot_framework.dialogue import Dialogue
 from wxbot_framework.members import MemberError, SnapshotExpired
 from wxbot_framework.mentions import parse_at_members, strip_at_labels
-from wxbot_framework.personality import PROMPTS, PersonalityExpired, PersonalityState, prepare_switch, game_reply
+from wxbot_framework.personality import PersonalityExpired, PersonalityState, prepare_switch, game_reply
 from wxbot_framework.runtime import BotApplication
 from wxbot_framework.sdk import Message
 from wxbot_framework.text import TextRouter, own_group_command
@@ -31,7 +31,13 @@ def dialogue_args(mock):
 
 
 class PersonalityTests(unittest.TestCase):
-    setUp = daily.DailySummaryTests.setUp
+    def setUp(self):
+        daily.DailySummaryTests.setUp(self)
+        self.store.apply_personalities([
+            {"name": name, "layers": {"声口": "说话短。"}, "previous": name}
+            for name in ("嘴臭", "卑微", "夸夸")
+        ])
+
     tearDown = daily.DailySummaryTests.tearDown
     new_store = daily.DailySummaryTests.new_store
     message = daily.DailySummaryTests.message
@@ -223,18 +229,17 @@ class PersonalityTests(unittest.TestCase):
         self.assertTrue(sent_system.startswith("原功能提示"))
         self.assertNotIn("禁止聊政治", sent_system)
 
-    def test_personality_prompt_applies_to_member_and_group_summaries(self):
+    def test_summary_does_not_use_character_layers(self):
         self.store.record(self.message("今天要认真工作"))
-        for name in PROMPTS:
-            self.store.set_personality(ROOM, name)
-            provider = Mock(return_value={"summary": "总结内容"})
-            self.ctx._llm = Mock(complete_json=provider)
-            for command in ("/总结 测试成员", "/总结群聊"):
-                self.plugin.on_message(self.message(command), self.ctx)
-                system = provider.call_args.args[0]
-                self.assertTrue(system.startswith(f"当前人格：{name}"))
-                self.assertIn("最高优先级", system)
-                self.assertIn("JSON", system)
+        self.store.set_personality(ROOM, "嘴臭")
+        provider = Mock(return_value={"summary": "总结内容"})
+        self.ctx._llm = Mock(complete_json=provider)
+        for command in ("/总结 测试成员", "/总结群聊"):
+            self.plugin.on_message(self.message(command), self.ctx)
+            system = provider.call_args.args[0]
+            self.assertTrue(system.startswith("你负责总结"))
+            self.assertNotIn("你就是嘴臭", system)
+            self.assertNotIn("说话短", system)
 
     def test_personality_change_during_model_request_discards_summary(self):
         self.store.record(self.message("当天记录"))
@@ -289,7 +294,9 @@ class PersonalityTests(unittest.TestCase):
         msg = self.chat("我今天又摸鱼了")
         plugin.on_message(msg, self.ctx)
         system, user = dialogue_args(provider)
-        self.assertTrue(system.startswith("当前人格：嘴臭"))
+        self.assertTrue(system.startswith("你就是嘴臭"))
+        self.assertIn("说话短", system)
+        self.assertNotIn("请用短句", system)
         payload = json.loads(user)
         self.assertEqual([item["text"] for item in payload["transcript"] if not item["current"]],
                          ["我今天第0次摸鱼", "我今天第1次摸鱼", "我今天第2次摸鱼"])
@@ -308,36 +315,26 @@ class PersonalityTests(unittest.TestCase):
         sent = self.backend.sent[-1]
         body = sent[1]
         self.assertEqual(sent[2], 100)
-        self.assertEqual(body, "三行代码就敢吹，先把手上的任务搞定再说。")
-        self.assertFalse(any(char in body for char in "`#*-|"))
+        self.assertEqual(body, "text\n**三行代码就敢吹，先把手上的任务搞定再说。**")
         sent_context = json.loads(dialogue_args(provider)[1])["transcript"]
         self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
-        self.assertIn("长度与排版优先", dialogue_args(provider)[0])
-        provider.return_value = "#**```"
-        plugin.on_message(self.chat(sequence=101), self.ctx)
-        self.assertIn("暂时无法回复", self.backend.sent[-1][1])
+        self.assertIn("现在用你的嘴说话", dialogue_args(provider)[0])
 
-    def test_short_mouth_summaries_omit_titles_and_cancel_restores_them(self):
+    def test_summary_keeps_its_title_when_a_character_is_selected(self):
         self.store.record(self.message("今天写了三行代码，剩下的明天做"))
         self.store.set_personality(ROOM, "嘴臭")
-        self.ctx._llm = Mock(complete_json=Mock(return_value={"summary": "**代码写三行，吹牛倒是写满了一整本。剩下的明天再说。**"}))
-        for command in ("/总结 测试成员", "/总结群聊"):
-            self.plugin.on_message(self.message(command), self.ctx)
-            body = self.backend.sent[-1][1]
-            self.assertEqual(body, "代码写三行，吹牛倒是写满了一整本。剩下的明天再说。")
-            self.assertNotIn("今日", body)
-            self.assertNotIn("*", body)
-        prepare_switch(self.message("/切换人格 取消"), self.store)
+        self.ctx._llm = Mock(complete_json=Mock(return_value={"summary": "代码写了三行，剩下的明天做。"}))
         self.plugin.on_message(self.message("/总结 测试成员"), self.ctx)
         self.assertTrue(self.backend.sent[-1][1].startswith("测试成员 今日聊天"))
+        self.plugin.on_message(self.message("/总结群聊"), self.ctx)
+        self.assertTrue(self.backend.sent[-1][1].startswith("今日群聊总结"))
 
     def test_short_mouth_idiom_reply_keeps_the_next_word_without_formatting(self):
         success = game_reply("嘴臭", True, "", "一心一意", "意气风发", "发愤图强")
-        failure = game_reply("嘴臭", False, "**末字和首字不相同，请认真核对接字**", "一心一意", "乱写", "一心一意")
+        failure = game_reply("嘴臭", False, "末字和首字不相同", "一心一意", "乱写", "一心一意")
         self.assertIn("发愤图强", success)
+        self.assertIn("接龙失败", failure)
         self.assertIn("一心一意", failure)
-        for text in (success, failure):
-            self.assertFalse(any(char in text for char in "`#*-|"))
 
     def test_mention_of_other_person_and_bot_output_do_not_call_model(self):
         provider = Mock(return_value="回答")
@@ -407,10 +404,11 @@ class PersonalityTests(unittest.TestCase):
         self.assertIn("暂时无法回复", self.backend.sent[-1][1])
         self.assertEqual(len(self.store.conversation_snapshot(self.chat(sequence=101)).messages), 2)
 
-    def test_reply_over_configured_limit_is_rejected(self):
+    def test_reply_over_configured_limit_is_truncated(self):
         plugin = self.setup_chat(Mock(return_value="字" * 601))
         plugin.on_message(self.chat(), self.ctx)
-        self.assertIn("暂时无法回复", self.backend.sent[-1][1])
+        body = "".join(item[1] for item in self.backend.sent)
+        self.assertEqual(body, "字" * 600)
 
     def test_idiom_game_skips_at_dialogue_and_style_keeps_correct_next_word(self):
         plugin = IdiomPlugin()
@@ -418,7 +416,7 @@ class PersonalityTests(unittest.TestCase):
         plugin.games[ROOM] = Mock()
         plugin.on_message(self.chat(), self.ctx)
         self.assertEqual(self.backend.sent, [])
-        for name in PROMPTS:
+        for name in ("嘴臭", "卑微", "夸夸"):
             reply = game_reply(name, True, "正确", "一心一意", "意气风发", "发扬光大")
             self.assertIn("发扬光大", reply)
             self.assertIn("以“大”", reply)
