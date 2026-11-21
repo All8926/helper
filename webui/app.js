@@ -628,18 +628,54 @@ function paintVoiceLibrary() {
     : '<p class="section-description">还没有音色。添加名称和音色 ID 后，群里就可以用 /切换音色 名称。</p>';
 }
 const personalityLayers = ['身份', '处境', '声口', '性情', '欲求与底线', '关系', '矛盾', '盲区'];
+const personalityHints = {
+  身份: '名字、来历，以及不能改口的几件事',
+  处境: '现在过的日子，开口时默认在意什么',
+  声口: '句子长短、节奏、口头禅，以及几句样例',
+  性情: '被开玩笑、被夸、被依赖、被命令时怎么反应',
+  '欲求与底线': '想守住什么，什么忙不帮',
+  关系: '怎么对待愿意跟他说话的人',
+  矛盾: '嘴上说的和实际上在乎的不一致',
+  盲区: '不知道、看错，或故意不提的事'
+};
 function emptyLayers(source) {
   const layers = {};
   for (const name of personalityLayers) layers[name] = source?.[name] || '';
   return layers;
 }
+function personalityLayer(item) {
+  return personalityLayers.includes(item.activeLayer) ? item.activeLayer : personalityLayers[0];
+}
 function paintPersonalities() {
   $('#personality-list').innerHTML = personalityItems.length ? personalityItems.map((item, index) => {
     const layers = emptyLayers(item.layers);
-    const fields = personalityLayers.map(name =>
-      `<label>${escape(name)}<textarea data-personality-layer="${escape(name)}" rows="4" spellcheck="false">${escape(layers[name])}</textarea></label>`).join('');
-    return `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><div class="personality-layers">${fields}</div></div>`;
-  }).join('') : '<p class="section-description">还没有人格。添加后填写用到的层面，空着的层不会发给模型。</p>';
+    const active = personalityLayer(item);
+    item.activeLayer = active;
+    const tabs = personalityLayers.map((name, layerIndex) => {
+      const selected = name === active;
+      const filled = layers[name].trim() ? ' is-filled' : '';
+      return `<button type="button" class="personality-tab${filled}" role="tab" id="personality-${index}-tab-${layerIndex}" aria-selected="${selected}" aria-controls="personality-${index}-panel-${layerIndex}" tabindex="${selected ? 0 : -1}" data-personality-tab="${escape(name)}">${escape(name)}</button>`;
+    }).join('');
+    const panels = personalityLayers.map((name, layerIndex) => {
+      const selected = name === active;
+      return `<div class="personality-panel${selected ? '' : ' hidden'}" role="tabpanel" id="personality-${index}-panel-${layerIndex}" aria-labelledby="personality-${index}-tab-${layerIndex}" data-personality-panel="${escape(name)}"><textarea data-personality-layer="${escape(name)}" rows="12" spellcheck="false" placeholder="${escape(personalityHints[name])}">${escape(layers[name])}</textarea></div>`;
+    }).join('');
+    return `<div class="personality-card" data-index="${index}"><div class="personality-card-head"><label>名称<input data-personality-name value="${escape(item.name)}" maxlength="16" autocomplete="off" spellcheck="false"></label><button type="button" class="text-button" data-personality-remove>删除</button></div><div class="editor-tabs personality-tabs" role="tablist" aria-label="人格层面">${tabs}</div>${panels}</div>`;
+  }).join('') : '<p class="section-description">还没有人格。添加后按层面填写，空着的层不会发给模型。</p>';
+}
+function selectPersonalityTab(tab) {
+  const card = tab.closest('[data-index]');
+  const item = personalityItems[Number(card.dataset.index)];
+  const name = tab.dataset.personalityTab;
+  item.activeLayer = name;
+  for (const button of card.querySelectorAll('[data-personality-tab]')) {
+    const selected = button === tab;
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
+  for (const panel of card.querySelectorAll('[data-personality-panel]')) {
+    panel.classList.toggle('hidden', panel.dataset.personalityPanel !== name);
+  }
 }
 function syncMemberToggle() {
   const button = $('#behavior-members-toggle');
@@ -776,7 +812,7 @@ $('#behavior-form').onsubmit = event => {
 $('#global-prompt').oninput = () => { personalityDirty = true; };
 $('#reply-limit').oninput = () => { personalityDirty = true; };
 $('#personality-add').onclick = () => {
-  personalityItems.push({name: '', layers: emptyLayers(), previous: ''});
+  personalityItems.push({name: '', layers: emptyLayers(), previous: '', activeLayer: personalityLayers[0]});
   personalityDirty = true;
   paintPersonalities();
 };
@@ -786,17 +822,36 @@ $('#personality-list').oninput = event => {
   const item = personalityItems[Number(card.dataset.index)];
   if (event.target.matches('[data-personality-name]')) item.name = event.target.value;
   if (event.target.matches('[data-personality-layer]')) {
+    const name = event.target.dataset.personalityLayer;
     item.layers = emptyLayers(item.layers);
-    item.layers[event.target.dataset.personalityLayer] = event.target.value;
+    item.layers[name] = event.target.value;
+    for (const button of card.querySelectorAll('[data-personality-tab]')) {
+      if (button.dataset.personalityTab === name) button.classList.toggle('is-filled', event.target.value.trim().length > 0);
+    }
   }
   personalityDirty = true;
 };
 $('#personality-list').onclick = event => {
-  const button = event.target.closest('[data-personality-remove]');
-  if (!button) return;
-  personalityItems.splice(Number(button.closest('[data-index]').dataset.index), 1);
-  personalityDirty = true;
-  paintPersonalities();
+  const remove = event.target.closest('[data-personality-remove]');
+  if (remove) {
+    personalityItems.splice(Number(remove.closest('[data-index]').dataset.index), 1);
+    personalityDirty = true;
+    paintPersonalities();
+    return;
+  }
+  const tab = event.target.closest('[data-personality-tab]');
+  if (tab) selectPersonalityTab(tab);
+};
+$('#personality-list').onkeydown = event => {
+  const tab = event.target.closest('[data-personality-tab]');
+  if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const tabs = [...tab.parentElement.querySelectorAll('[data-personality-tab]')];
+  const index = tabs.indexOf(tab);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : event.key === 'ArrowLeft' ? index - 1 : index + 1;
+  const target = tabs[(next + tabs.length) % tabs.length];
+  selectPersonalityTab(target);
+  target.focus();
 };
 $('#personality-form').onsubmit = event => {
   event.preventDefault();
