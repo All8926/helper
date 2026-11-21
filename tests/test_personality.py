@@ -340,6 +340,7 @@ class PersonalityTests(unittest.TestCase):
         sent_context = json.loads(dialogue_args(provider)[1])["transcript"]
         self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
         self.assertIn("现在用你的嘴说话", dialogue_args(provider)[0])
+        self.assertIn("current 为 true", dialogue_args(provider)[0])
 
     def test_summary_keeps_its_title_when_a_character_is_selected(self):
         self.store.record(self.message("今天写了三行代码，剩下的明天做"))
