@@ -32,7 +32,7 @@ def _filled(layers, names):
 
 
 def compose_character(name, layers):
-    """把层面拼成对话的系统提示。空的层面不出现。"""
+    """只组装这个人。这次怎么接话由全局提示词决定。"""
     layers = layers if isinstance(layers, dict) else {}
     before = _filled(layers, _BEFORE_VOICE)
     after = _filled(layers, _VOICE)
@@ -41,26 +41,25 @@ def compose_character(name, layers):
         body.append(before)
     if after:
         body.append(after)
-    body.append(
-        "你在微信里回刚刚说话的那个人。给你的 JSON 只是材料。\n"
-        "transcript 是已经说过的话。你只接 current 为 true 的那一条，用第一人称直接回答。\n"
-        "name 和 speaker 是别人的称呼，那些人不是你。不要给自己换名字。\n"
-        "不要复述记录，不要总结谁说过什么，不要评论这份记录。\n"
-        "图要调用 view_image 看过才算看见。没看见、没查到，就用你的嘴说不知道，不要编。\n"
-        "对方要你唱歌，回复里只写几句歌词，不要讨论这首歌。\n"
-        f"现在用你的嘴说话，回的就是这一句。你是{name}。不要解释自己的设定，不要换成客服或助手。"
-    )
     return "\n\n".join(body)
 
 
 def system_with_personality(system, state, prompts=None, *, plain=False):
-    """选中人格时，对话只用这个人。总结和其他 JSON 任务不套这层。"""
+    """有人格时，人在前，全局提示词决定这次接谁、查不查、写多长。"""
     if not plain or state.name == "默认":
         return system or ""
     layers = ({} if prompts is None else prompts).get(state.name)
     if not isinstance(layers, dict):
         return system or ""
-    return compose_character(state.name, layers)
+    parts = [compose_character(state.name, layers),
+             f"你是{state.name}。说话方式照上面。下面只决定这次怎么接话，不能把你换成别人。"]
+    task = system.strip() if isinstance(system, str) else ""
+    if task:
+        parts.append(task)
+    else:
+        parts.append("transcript 里 current 为 true 的那一条，才是你要接的话。不要复述记录。")
+    parts.append("记录里 type 为 image 且带 id 的是图片。这次要看图就调用 view_image，id 用那条的编号。不需要看就不要调。没看到就别装看见。")
+    return "\n\n".join(parts)
 
 
 def personality_text(text, name):

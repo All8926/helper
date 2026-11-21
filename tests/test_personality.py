@@ -310,6 +310,7 @@ class PersonalityTests(unittest.TestCase):
         self.store.set_personality(ROOM, "嘴臭")
         for index in range(3):
             self.store.record(self.message(f"我今天第{index}次摸鱼", sequence=index + 1))
+        self.store.global_prompt = "只回眼前这个人"
         provider = Mock(return_value="你这效率，进度条看了都想请假。")
         plugin = self.setup_chat(provider)
         msg = self.chat("我今天又摸鱼了")
@@ -317,6 +318,7 @@ class PersonalityTests(unittest.TestCase):
         system, user = dialogue_args(provider)
         self.assertTrue(system.startswith("你就是嘴臭"))
         self.assertIn("说话短", system)
+        self.assertIn("只回眼前这个人", system)
         self.assertNotIn("请用短句", system)
         payload = json.loads(user)
         self.assertEqual([item["text"] for item in payload["transcript"] if not item["current"]],
@@ -339,7 +341,6 @@ class PersonalityTests(unittest.TestCase):
         self.assertEqual(body, "text\n**三行代码就敢吹，先把手上的任务搞定再说。**")
         sent_context = json.loads(dialogue_args(provider)[1])["transcript"]
         self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
-        self.assertIn("现在用你的嘴说话", dialogue_args(provider)[0])
         self.assertIn("current 为 true", dialogue_args(provider)[0])
 
     def test_summary_keeps_its_title_when_a_character_is_selected(self):
