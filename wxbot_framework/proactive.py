@@ -28,11 +28,6 @@ def clean_reply(value):
     return " ".join(str(value or "").split())
 
 
-def unnamed_input(day, transcript, diary, people):
-    return json.dumps({"date": day, "diary": diary, "people": people, "transcript": transcript},
-                      ensure_ascii=False)
-
-
 class RoomListener:
     """每个群记：机器人上次说话的时间、上次看过的人类发言、
     最近一小时主动说出去的时间点，以及等人说完再判断的截止时间。"""

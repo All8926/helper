@@ -222,7 +222,7 @@ class SpeechTests(unittest.TestCase):
         self.assertEqual(self.backend.sent[-1], (ROOM, 'voice'))
         payloads = [call.args[1] for call in self.ctx._llm.chat.call_args_list]
         self.assertTrue(payloads)
-        self.assertIn('今天写代码', payloads[-1])
+        self.assertIn('今天写代码', json.dumps(payloads[-1], ensure_ascii=False))
 
     def test_auto_mode_follows_the_model_unless_the_line_should_be_read(self):
         self.assertFalse(prefer_voice('看这个 https://example.com', True, 'auto', 160))

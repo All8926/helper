@@ -1,4 +1,4 @@
-"""点名对话。模型看最近一小段流水、近两天的日记和当前说话人的档案，其余资料靠工具自己查。"""
+"""点名对话。聊天记录拆成真实 user/assistant 轮次，近两天日记和个人档案放入系统背景，其余资料靠工具自己查。"""
 import json
 import re
 from datetime import datetime
@@ -102,6 +102,81 @@ def working_messages(messages):
     return chosen
 
 
+def _moment_hhmm(received_at):
+    try:
+        return datetime.fromisoformat(str(received_at)).astimezone(BEIJING).strftime("%H:%M")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _human_line(row, *, private=False):
+    speaker = row.get("speaker") or ("对方" if private else "群友")
+    moment = _moment_hhmm(row.get("received_at"))
+    prefix = f"[{moment}] " if moment else ""
+    if row.get("kind") == "image":
+        token = row.get("media_ref") or ""
+        label = f"[图片 id={token}]" if token else "[图片]"
+        return f"{prefix}{label}" if private else f"{prefix}{speaker}：{label}"
+    text = transcript_text(strip_at_labels(row.get("text") or ""))
+    if not text:
+        return ""
+    return f"{prefix}{text}" if private else f"{prefix}{speaker}：{text}"
+
+
+def _append_turn(turns, role, line):
+    if not line:
+        return
+    if turns and turns[-1]["role"] == role:
+        turns[-1] = {"role": role, "content": turns[-1]["content"] + "\n" + line}
+    else:
+        turns.append({"role": role, "content": line})
+
+
+def history_turns(rows, *, private=False, bot_id=""):
+    """把历史记录拆成真实的 user/assistant 对话轮次，连续同角色合并。"""
+    turns = []
+    for row in rows:
+        is_bot = bool(row.get("bot") or row.get("bot_generated") or (bot_id and row.get("sender_id") == bot_id))
+        if is_bot:
+            text = transcript_text(strip_at_labels(row.get("text") or ""))
+            _append_turn(turns, "assistant", text)
+            continue
+        _append_turn(turns, "user", _human_line(row, private=private))
+    return turns
+
+
+def context_note(day, *, speaker="", diary=(), memory=(), people=(), unnamed=False):
+    """把日期、日记、成员档案与当前会话对象整理成系统背景，不塞进用户发言。"""
+    lines = [f"当前日期：{day}"]
+    if unnamed:
+        lines.append("当前情境：群里自然接话（未点名），直接对群里接最后一句，不艾特、不引用。")
+    elif speaker:
+        lines.append(f"当前对话人：{speaker}")
+    cleaned_diary = public_diary(diary)
+    if cleaned_diary:
+        lines.append("近期群日记：" + "；".join(f"{item['date']} {item['summary']}" for item in cleaned_diary))
+    cleaned_memory = public_memory(memory)
+    if cleaned_memory:
+        target = speaker or "对方"
+        lines.append(f"关于{target}的已知信息：" + "；".join(cleaned_memory))
+    for item in people:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or "群友"
+        facts = public_memory(item.get("memory") or ())
+        if facts:
+            lines.append(f"关于{name}的已知信息：" + "；".join(facts))
+    return "【参考背景（仅作已知背景，不是新提问）】\n" + "\n".join(lines)
+
+
+def merge_system(system, note):
+    base = (system or "").strip()
+    extra = (note or "").strip()
+    if base and extra:
+        return base + "\n\n" + extra
+    return base or extra
+
+
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.S)
 
 
@@ -138,16 +213,40 @@ def checked_reply(text, limit):
     return reply
 
 
+def quote_hint(message, images):
+    """提取当前发言引用的图片编号或文字摘要，直接附在当前发言前。"""
+    from .quoted import reference
+    quoted = reference(message)
+    if quoted is None:
+        return ""
+    if quoted.kind == "image":
+        native = message.data.get("quoted_message_id")
+        token = images.token_for(native) if native else ""
+        return f"[引用图片 id={token}]" if token else "[引用图片]"
+    summary = transcript_text(quoted.text or "")
+    if not summary:
+        return ""
+    author = f"{quoted.author}：" if quoted.author else ""
+    return f"[引用 {author}{summary}]"
+
+
 class Dialogue:
     def __init__(self, client):
         self.client = client
 
-    def reply(self, snapshot, *, diary=(), memory=(), tools=(), system="", limit=600):
-        """返回要发到群里的正文。system 是本账号的全局提示词，空则只有人格包装。"""
-        transcript = [transcript_line(row, current=False) for row in working_messages(snapshot.messages)]
-        transcript.append({"time": datetime.now(BEIJING).strftime("%H:%M:%S"),
-                           "speaker": snapshot.speaker_name, "type": "text",
-                           "text": transcript_text(strip_at_labels(snapshot.current)), "current": True})
-        body = {"name": snapshot.speaker_name, "date": snapshot.day, "diary": public_diary(diary),
-                "memory": public_memory(memory), "transcript": transcript}
-        return checked_reply(self.client.chat(system or "", json.dumps(body, ensure_ascii=False), tools), limit)
+    def reply(self, snapshot, *, diary=(), memory=(), tools=(), system="", limit=600, quote=""):
+        """返回要发出去的正文。system 是本账号的全局提示词，背景与历史拆为真实多轮对话。"""
+        private = not str(snapshot.room).endswith("@chatroom")
+        turns = history_turns(working_messages(snapshot.messages), private=private)
+        moment = datetime.now(BEIJING).strftime("%H:%M")
+        current = transcript_text(strip_at_labels(snapshot.current))
+        speaker = snapshot.speaker_name or ("对方" if private else "群友")
+        prefix = f"{quote} " if quote else ""
+        if current:
+            last_line = f"[{moment}] {prefix}{current}" if private else f"[{moment}] {speaker}：{prefix}{current}"
+        else:
+            call = "（叫了你一声）" if private else "（艾特了你）"
+            last_line = f"[{moment}] {prefix}{call}" if private else f"[{moment}] {speaker}：{prefix}{call}"
+        turns.append({"role": "user", "content": last_line})
+        note = context_note(snapshot.day, speaker=speaker, diary=diary, memory=memory)
+        return checked_reply(self.client.chat(merge_system(system, note), turns, tools), limit)

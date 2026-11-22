@@ -7,7 +7,7 @@ from datetime import datetime
 from wxbot_framework.chat_tools import private_chat_tools
 from wxbot_framework.decision import Decider
 from wxbot_framework.dialogue import (SING_CRITERIA, SING_QUESTION, VOICE_CRITERIA, VOICE_QUESTION,
-                                      Dialogue, sing_state, singable, voice_state)
+                                      Dialogue, quote_hint, sing_state, singable, voice_state)
 from wxbot_framework.image_receiver import image_download_pending
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import BEIJING, SnapshotExpired
@@ -121,7 +121,8 @@ class Plugin:
         snapshot = self._with_quoted_image(message, snapshot)
         reply = Dialogue(ctx.llm_for(message, personality=personality)).reply(
             snapshot, diary=(), memory=(), tools=tools,
-            system=self.members.global_prompt, limit=self.members.reply_limit)
+            system=self.members.global_prompt, limit=self.members.reply_limit,
+            quote=quote_hint(message, self.images))
         reply = personality_text(reply, personality.name)
         ctx.logger.info("对话正文 | 私聊=%s | %s", message.chat_id, reply)
         self._send(message, ctx, snapshot, reply, delivery_guard)

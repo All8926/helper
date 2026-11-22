@@ -136,9 +136,8 @@ class PluginTests(unittest.TestCase):
         self.named, self.spoken = [], []
 
         def chat(system, user, tools=(), **_kwargs):
-            body = json.loads(user)
-            if "people" in body:
-                self.spoken.append((system, body, [tool.name for tool in tools]))
+            if "未点名" in system:
+                self.spoken.append((system, user, [tool.name for tool in tools]))
                 return self.unnamed
             self.named.append((system, user))
             return "这是回答。"
@@ -245,15 +244,15 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(self.spoken, [])
         self.plugin._watch_once(now=self.later())
         self.assertEqual(self.backend.sent[-1], (ROOM, "要不吃烧烤"))
-        system, body, tools = self.spoken[0]
+        system, turns, tools = self.spoken[0]
         self.assertNotIn("禁止聊政治", system)
-        self.assertEqual([row["text"][-5:] for row in body["transcript"]], ["今晚吃什么", "这是回答。", "那明天吃啥"])
-        self.assertEqual([row["bot"] for row in body["transcript"]], [False, True, False])
-        self.assertEqual(body["people"][0]["memory"], ["喜欢火锅"])
+        self.assertEqual([item["role"] for item in turns], ["user", "assistant", "user"])
+        self.assertEqual([item["content"][-5:] for item in turns], ["今晚吃什么", "这是回答。", "那明天吃啥"])
+        self.assertIn("喜欢火锅", system)
         self.assertIn("search_history", tools)
         self.assertIn("view_image", tools)
         self.assertNotIn("web_search", tools)
-        self.assertFalse(any(row.get("type") == "image" and row.get("id") for row in body["transcript"]))
+        self.assertFalse(any("id=" in item["content"] for item in turns))
         self.assertEqual(self.store.recent_room_lines(ROOM, 60, 5)[-1]["text"], "要不吃烧烤")
         self.plugin._watch_once(now=self.later(10))
         self.assertEqual(len(self.spoken), 1)
@@ -322,7 +321,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(self.spoken, [])
         self.plugin._watch_once(now=1121)
         self.assertEqual(self.backend.sent, [(ROOM, "我推荐香山")])
-        self.assertEqual(self.spoken[0][1]["transcript"][-1]["text"], "好啊去哪座山")
+        self.assertTrue(self.spoken[0][1][-1]["content"].endswith("：好啊去哪座山"))
         line("香山人多吗", 3)
         self.plugin._watch_once(now=1300)
         self.assertEqual(len(self.spoken), 1)
@@ -443,6 +442,7 @@ class PluginTests(unittest.TestCase):
 
     def _look(self):
         """记下上下文里的图片编号。模型自己决定看时，测试替它看最后一张。"""
+        import re
         self.offered, self.looked, self.systems, self.payloads = [], [], [], []
 
         def chat(system, user, tools=(), image=None, **_kwargs):
@@ -450,9 +450,9 @@ class PluginTests(unittest.TestCase):
                 self.looked.append(image)
                 return "一张纯色图片"
             found = {tool.name: tool for tool in tools}
-            body = json.loads(user)
-            self.payloads.append(body)
-            ids = [row["id"] for row in body.get("transcript", []) if row.get("type") == "image" and row.get("id")]
+            self.payloads.append(user)
+            joined = "\n".join(item["content"] for item in user)
+            ids = re.findall(r"\[(?:引用)?图片 id=([^\]]+)\]", joined)
             self.offered.append(ids)
             self.systems.append(system)
             self.tools = found
@@ -472,8 +472,8 @@ class PluginTests(unittest.TestCase):
         self.assertNotIn("附带了一张图片", self.systems[-1])
         self._picture(red, status="failed", identifier="82", sequence=3)
         self.at("失败的图", 4)
-        failed = [row for row in self.payloads[-1]["transcript"] if row.get("type") == "image" and "id" not in row]
-        self.assertTrue(failed)
+        joined = "\n".join(item["content"] for item in self.payloads[-1])
+        self.assertIn("[图片]", joined)
         self._picture(red, identifier="83", sequence=5)
         self.at("这是什么", 6)
         self.assertIn(vision_data_url(red), self.looked)
@@ -506,8 +506,7 @@ class PluginTests(unittest.TestCase):
                                                    "available": True, "truncated": False}})
         self.store.record(missing)
         self.plugin.on_message(missing, self.ctx)
-        ids = [row.get("id") for row in self.payloads[-1]["transcript"] if row.get("type") == "image"]
-        self.assertNotIn("404", ids)
+        self.assertNotIn("404", self.offered[-1])
 
     def test_quoted_image_waits_until_the_download_is_ready(self):
         from wxbot_framework.image_receiver import _track_download

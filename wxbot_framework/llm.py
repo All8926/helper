@@ -501,9 +501,24 @@ class LLMClient:
             raise LLMError("图片内容无效或过大")
         return [{"type": "text", "text": user}, {"type": "image_url", "image_url": {"url": image}}]
 
+    def _messages(self, system, user, image):
+        """支持单条文本或已按 user/assistant 拆好的多轮对话。"""
+        messages = [{"role": "system", "content": system}]
+        if isinstance(user, (list, tuple)):
+            turns = [{"role": item["role"], "content": item["content"]} for item in user
+                     if isinstance(item, dict) and item.get("role") in ("user", "assistant")
+                     and isinstance(item.get("content"), str) and item["content"].strip()]
+            if not turns or turns[-1]["role"] != "user":
+                raise LLMError("对话消息列表必须以用户发言结尾")
+            if image is not None:
+                turns[-1] = {"role": "user", "content": self._user_content(turns[-1]["content"], image)}
+            messages.extend(turns)
+            return messages
+        messages.append({"role": "user", "content": self._user_content(user, image)})
+        return messages
+
     def _base_payload(self, system, user, image, thinking):
-        payload = {"model": self.model, "messages": [{"role": "system", "content": system},
-                                                       {"role": "user", "content": self._user_content(user, image)}],
+        payload = {"model": self.model, "messages": self._messages(system, user, image),
                    self.token_limit_parameter: self.max_tokens, "stream": False, **self.extra_body}
         self._apply_thinking(payload, thinking)
         # 看图要上传图片，短超时很容易失败；不超过配置允许的 60 秒。

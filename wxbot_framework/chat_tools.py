@@ -128,7 +128,8 @@ def web_search_tool(llm):
             return _search_doubao(settings, llm, query)
         return _search_http(settings, llm.api_key, query)
 
-    return Tool("web_search", "搜索公开网页，查天气、新闻、价格、赛事等实时信息，或你没把握的公开事实。闲聊不要搜。",
+    return Tool("web_search",
+                "本轮回复发出前同步搜索公开网页，查天气、新闻、价格、赛事等实时信息或没把握的事实。需要查就立刻调用，不要发文字让对方等；闲聊不要搜。",
                 {"type": "object", "properties": {"query": {"type": "string", "description": "搜索词，1 到 128 个字"}},
                  "required": ["query"]}, run)
 
@@ -147,10 +148,11 @@ def view_image_tool(llm):
             return "图片读取失败"
         return llm.vision_client().chat(VISION_SYSTEM, question, image=url, thinking=False)
 
-    return Tool("view_image", "查看上下文里某张已下载的图片，返回文字描述。id 是消息里的编号，不是文件路径。",
+    return Tool("view_image",
+                "本轮回复发出前同步查看消息里 [图片 id=...] 或 [引用图片 id=...] 的图片，返回画面文字描述。需要看图就立刻调用，不要发文字说先看看；id 填消息里的编号。",
                 {"type": "object", "properties": {
-                    "id": {"type": "string", "description": "图片消息上的编号"},
-                    "question": {"type": "string", "description": "想从图里了解什么"}},
+                    "id": {"type": "string", "description": "消息中 [图片 id=...] 里的编号"},
+                    "question": {"type": "string", "description": "想从图里看清什么细节"}},
                  "required": ["id"]}, run)
 
 

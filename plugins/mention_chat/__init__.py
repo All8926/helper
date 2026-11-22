@@ -11,8 +11,8 @@ from wxbot_framework.chat_tools import chat_tools
 from wxbot_framework.decision import Decider
 from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, SING_CRITERIA, SING_QUESTION,
                                       VOICE_CONTEXT_LINES, VOICE_CRITERIA, VOICE_QUESTION, Dialogue,
-                                      checked_reply, sing_state, singable, transcript_line, voice_state,
-                                      working_messages)
+                                      checked_reply, context_note, history_turns, merge_system, quote_hint,
+                                      sing_state, singable, transcript_line, voice_state, working_messages)
 from wxbot_framework.image_receiver import image_download_pending
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import BEIJING, SnapshotExpired
@@ -183,7 +183,8 @@ class Plugin:
         reply = Dialogue(ctx.llm_for(message, personality=personality)).reply(
             snapshot, diary=self.members.recent_digests(room, PROMPT_DIARY_DAYS),
             memory=self.members.facts_for(room, message.sender_id), tools=tools,
-            system=self.members.global_prompt, limit=self.members.reply_limit)
+            system=self.members.global_prompt, limit=self.members.reply_limit,
+            quote=quote_hint(message, self.images))
         reply = personality_text(reply, personality.name)
         ctx.logger.info("对话正文 | 群=%s | %s", room, reply)
         model_seconds = time.perf_counter() - started
@@ -335,10 +336,13 @@ class Plugin:
         try:
             personality = ctx.personality(anchor)
             tools = chat_tools(ctx.llm, self.members, room, speakers=self._speakers(chosen))
+            cutoff = chosen.index(last_human) + 1 if last_human in chosen else len(chosen)
+            turns = history_turns(chosen[:cutoff], bot_id=bot)
+            note = context_note(datetime.now(BEIJING).date().isoformat(),
+                                diary=self.members.recent_digests(room, PROMPT_DIARY_DAYS),
+                                people=self._people(room, chosen), unnamed=True)
             reply = ctx.llm_for(anchor, personality=personality).chat(
-                self.members.global_prompt, pro.unnamed_input(datetime.now(BEIJING).date().isoformat(), transcript,
-                                                              public_diary(self.members.recent_digests(room, PROMPT_DIARY_DAYS)),
-                                                              self._people(room, chosen)), tools)
+                merge_system(self.members.global_prompt, note), turns, tools)
             reply = personality_text(checked_reply(pro.clean_reply(reply), self.members.reply_limit), personality.name)
             ctx.logger.info("对话正文 | 群=%s | %s", room, reply)
         except (LLMError, PersonalityExpired) as error:

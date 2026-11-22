@@ -647,6 +647,22 @@ class VisionRequestTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 400)
         self.assertNotIn("AAAA", str(caught.exception))
 
+    def test_chat_accepts_multiturn_messages_and_preserves_assistant_turns(self):
+        turns = [
+            {"role": "user", "content": "[10:00] 小猫：今晚吃啥"},
+            {"role": "assistant", "content": "看你想吃辣还是清淡。"},
+            {"role": "user", "content": "[10:01] 小猫：吃火锅"},
+        ]
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response("走，安排牛油锅。")) as call:
+            reply = self.client.chat("你是小机", turns)
+        self.assertEqual(reply, "走，安排牛油锅。")
+        payload = json.loads(call.call_args.args[0].data)
+        self.assertEqual([item["role"] for item in payload["messages"]],
+                         ["system", "user", "assistant", "user"])
+        self.assertEqual(payload["messages"][2]["content"], "看你想吃辣还是清淡。")
+        with self.assertRaises(LLMError):
+            self.client.chat("你是小机", [{"role": "assistant", "content": "没有用户结尾"}])
+
 
 class SeenImageTests(unittest.TestCase):
     def test_recent_image_expires_but_quoted_id_remains_until_evicted(self):

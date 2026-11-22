@@ -23,9 +23,9 @@ ROOM, CAT, ROBOT, OTHER_ROOM, OTHER = daily.ROOM, daily.CAT, daily.ROBOT, daily.
 
 
 def dialogue_args(mock):
-    """档案会在回复后再调一次模型，核对时要找到带流水的那一次。"""
+    """档案会在回复后再调一次模型，核对时要找到带对话轮次的那一次。"""
     for item in reversed(mock.call_args_list):
-        if len(item.args) > 1 and isinstance(item.args[1], str) and '"transcript"' in item.args[1]:
+        if len(item.args) > 1 and isinstance(item.args[1], list):
             return item.args[:2]
     raise AssertionError("没有把群聊流水交给模型")
 
@@ -320,12 +320,10 @@ class PersonalityTests(unittest.TestCase):
         self.assertIn("说话短", system)
         self.assertIn("只回眼前这个人", system)
         self.assertNotIn("请用短句", system)
-        payload = json.loads(user)
-        self.assertEqual([item["text"] for item in payload["transcript"] if not item["current"]],
+        self.assertEqual([line.split("：", 1)[1] for line in user[0]["content"].splitlines()],
                          ["我今天第0次摸鱼", "我今天第1次摸鱼", "我今天第2次摸鱼"])
-        self.assertEqual(payload["transcript"][-1]["text"], "我今天又摸鱼了")
-        self.assertTrue(payload["transcript"][-1]["current"])
-        self.assertNotIn(CAT, user)
+        self.assertTrue(user[-1]["content"].endswith("：我今天又摸鱼了"))
+        self.assertNotIn(CAT, json.dumps(user, ensure_ascii=False))
         self.assertEqual(self.backend.sent[-1][2], msg.data["native_message_id"])
         self.assertFalse(self.backend.sent[-1][1].startswith("@"))
 
@@ -339,9 +337,9 @@ class PersonalityTests(unittest.TestCase):
         body = sent[1]
         self.assertEqual(sent[2], 100)
         self.assertEqual(body, "text\n**三行代码就敢吹，先把手上的任务搞定再说。**")
-        sent_context = json.loads(dialogue_args(provider)[1])["transcript"]
-        self.assertEqual([item["text"] for item in sent_context if not item["current"]], ["今天写了三行代码"])
-        self.assertIn("current 为 true", dialogue_args(provider)[0])
+        system, turns = dialogue_args(provider)
+        self.assertIn("今天写了三行代码", turns[0]["content"])
+        self.assertIn("直接回应最后一条用户发言", system)
 
     def test_summary_keeps_its_title_when_a_character_is_selected(self):
         self.store.record(self.message("今天写了三行代码，剩下的明天做"))

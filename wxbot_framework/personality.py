@@ -46,19 +46,40 @@ def compose_character(name, layers):
 
 def system_with_personality(system, state, prompts=None, *, plain=False):
     """有人格时，人在前，全局提示词决定这次接谁、查不查、写多长。"""
+    raw = system.strip() if isinstance(system, str) else ""
+    marker = "【参考背景"
+    if marker in raw:
+        idx = raw.index(marker)
+        task, note = raw[:idx].strip(), raw[idx:].strip()
+    else:
+        task, note = raw, ""
+    tool_rule = (
+        "你在微信里直接回话：assistant 消息是你之前亲口说过的原话，user 消息是群友或对方的发言。"
+        "你只输出这次要发出去的回复正文，不加自己的名字前缀、不替别人发言、也不原样复读对方的话。\n"
+        "工具在本轮回复发出前同步执行：消息里标有 [图片 id=xxx] 或 [引用图片 id=xxx] 时，"
+        "只要回应需要知道图里内容，就立刻发起 view_image 工具调用（传入对应 id），拿到画面描述后再开口；"
+        "一旦不调工具直接输出文字，本轮对话就会立刻发出并结束，所以绝不要用文字回复“我先看看图”“等我查一下”。"
+        "不需要看图或查资料时直接回复，没看过图就别装看见。"
+    )
     if not plain or state.name == "默认":
-        return system or ""
+        parts = [task or "直接回应最后一条用户发言。"]
+        if note:
+            parts.append(note)
+        parts.append(tool_rule)
+        return "\n\n".join(parts)
     layers = ({} if prompts is None else prompts).get(state.name)
     if not isinstance(layers, dict):
-        return system or ""
+        parts = [task] if task else []
+        if note:
+            parts.append(note)
+        parts.append(tool_rule)
+        return "\n\n".join(parts)
     parts = [compose_character(state.name, layers),
-             f"你是{state.name}。说话方式照上面。下面只决定这次怎么接话，不能把你换成别人。"]
-    task = system.strip() if isinstance(system, str) else ""
-    if task:
-        parts.append(task)
-    else:
-        parts.append("transcript 里 current 为 true 的那一条，才是你要接的话。不要复述记录。")
-    parts.append("记录里 type 为 image 且带 id 的是图片。这次要看图就调用 view_image，id 用那条的编号。不需要看就不要调。没看到就别装看见。")
+             f"你是{state.name}，说话方式照上面。下面只决定这次怎么接话与调用工具，不能把你换成别人。",
+             task or "直接回应最后一条用户发言。"]
+    if note:
+        parts.append(note)
+    parts.append(tool_rule)
     return "\n\n".join(parts)
 
 

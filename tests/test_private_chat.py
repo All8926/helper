@@ -192,9 +192,10 @@ class PrivatePluginTests(PrivateFixture, unittest.TestCase):
         self.assertEqual(self.ctx.reply.call_args.args[:2], (heard, "收到，这是私聊回答"))
         tools = [tool.name for tool in self.llm.chat.call_args.args[2]]
         self.assertEqual(tools, ["view_image", "search_history"])
-        body = json.loads(self.llm.chat.call_args.args[1])
-        self.assertEqual(body["diary"], [])
-        self.assertEqual(body["memory"], [])
+        system, turns = self.llm.chat.call_args.args[:2]
+        self.assertNotIn("近期群日记", system)
+        self.assertNotIn("已知信息", system)
+        self.assertEqual(turns[-1]["role"], "user")
         self.assertEqual(self.store.search_room_lines(FRIEND, "私聊回答", 1)[-1]["text"], "收到，这是私聊回答")
 
     def test_model_failure_sends_a_short_retry_notice(self):
