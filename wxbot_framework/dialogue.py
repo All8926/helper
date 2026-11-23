@@ -114,7 +114,8 @@ def _human_line(row, *, private=False):
     moment = _moment_hhmm(row.get("received_at"))
     prefix = f"[{moment}] " if moment else ""
     if row.get("kind") == "image":
-        label = "（发来一张图片）"
+        # 不用括号，避免模型把表情也写成旁白。
+        label = "发来一张图片"
         return f"{prefix}{label}" if private else f"{prefix}{speaker}：{label}"
     text = transcript_text(strip_at_labels(row.get("text") or ""))
     if not text:
@@ -249,7 +250,7 @@ def quote_hint(message):
     if quoted is None:
         return ""
     if quoted.kind == "image":
-        return "（引用了一张图片）"
+        return "引用了一张图片"
     summary = transcript_text(quoted.text or "")
     if not summary:
         return ""
