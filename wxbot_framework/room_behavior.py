@@ -481,11 +481,14 @@ def view_behavior(options):
             "private_chat": private_chat}
 
 
-def command_allowed(admins, sender, robot):
-    """还没指定管理员时不限制。机器人自己的微信 ID 始终可以发指令。"""
+def command_allowed(admins, sender, robot, sender_role="unknown"):
+    """还没指定管理员时不限制。已指定时，后台管理员、机器人自己和已确认的群主可以发指令。"""
     if not admins:
         return True
-    return sender == robot or sender in admins
+    if sender == robot or sender in admins:
+        return True
+    # 微信群管理员不会因此放行；身份未知也不放行。
+    return isinstance(sender_role, str) and sender_role == "owner"
 
 
 def is_slash_command(text):
@@ -527,7 +530,10 @@ def command_blocked(store, message):
             message.chat_id not in store.groups or message.data.get("bot_generated") or
             not is_slash_command(message.text)):
         return False
-    return not command_allowed(store.room_admins(message.chat_id), message.sender_id, store.account)
+    role = message.data.get("sender_role", "unknown")
+    if not isinstance(role, str) or role not in ("owner", "admin", "member"):
+        role = "unknown"
+    return not command_allowed(store.room_admins(message.chat_id), message.sender_id, store.account, role)
 
 
 def alias_mentioned(text, aliases):

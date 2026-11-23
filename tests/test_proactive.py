@@ -451,8 +451,7 @@ class PluginTests(unittest.TestCase):
                 return "一张纯色图片"
             found = {tool.name: tool for tool in tools}
             self.payloads.append(user)
-            joined = "\n".join(item["content"] for item in user)
-            ids = re.findall(r"\[(?:引用)?图片 id=([^\]]+)\]", joined)
+            ids = re.findall(r"([0-9a-f]{8})（", system.split("可查看图片", 1)[-1] if "可查看图片" in system else "")
             self.offered.append(ids)
             self.systems.append(system)
             self.tools = found
@@ -469,11 +468,13 @@ class PluginTests(unittest.TestCase):
         self._picture(blue, sender=OTHER, identifier="81", sequence=1)
         self.at("看别人的图", 2)
         self.assertTrue(self.offered[-1])
+        self.assertNotIn(self.offered[-1][-1], "\n".join(item["content"] for item in self.payloads[-1]))
         self.assertNotIn("附带了一张图片", self.systems[-1])
         self._picture(red, status="failed", identifier="82", sequence=3)
         self.at("失败的图", 4)
         joined = "\n".join(item["content"] for item in self.payloads[-1])
-        self.assertIn("[图片]", joined)
+        self.assertIn("（发来一张图片）", joined)
+        self.assertNotIn("id=", joined)
         self._picture(red, identifier="83", sequence=5)
         self.at("这是什么", 6)
         self.assertIn(vision_data_url(red), self.looked)
@@ -499,6 +500,8 @@ class PluginTests(unittest.TestCase):
                                                  "available": True, "truncated": False}})
         self.store.record(asked)
         self.plugin.on_message(asked, self.ctx)
+        self.assertIn("（引用了一张图片）", self.payloads[-1][-1]["content"])
+        self.assertNotIn(self.offered[-1][-1], self.payloads[-1][-1]["content"])
         self.assertIn(vision_data_url(blue), self.looked)
         missing = Message("再看", ROOM, sender_id=CAT, is_group=True, session_id="test", sequence=11, type=49,
                           data={"app_type": 57, "is_at_self": True, "at_members": (ROBOT,), "quoted_message_id": "404",

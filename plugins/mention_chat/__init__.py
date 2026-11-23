@@ -11,12 +11,13 @@ from wxbot_framework.chat_tools import chat_tools
 from wxbot_framework.decision import Decider
 from wxbot_framework.dialogue import (PROMPT_DIARY_DAYS, SING_CRITERIA, SING_QUESTION,
                                       VOICE_CONTEXT_LINES, VOICE_CRITERIA, VOICE_QUESTION, Dialogue,
-                                      checked_reply, context_note, history_turns, merge_system, quote_hint,
+                                      checked_reply, context_note, history_turns, image_catalog, merge_system,
+                                      quote_hint, quoted_image_token,
                                       sing_state, singable, transcript_line, voice_state, working_messages)
 from wxbot_framework.image_receiver import image_download_pending
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import BEIJING, SnapshotExpired
-from wxbot_framework.memory import MemoryWorker, public_diary, public_memory
+from wxbot_framework.memory import MemoryWorker, public_memory
 from wxbot_framework.mentions import strip_at_labels
 from wxbot_framework.pacing import counting_send, describe_send
 from wxbot_framework.personality import PersonalityExpired, personality_text
@@ -184,7 +185,7 @@ class Plugin:
             snapshot, diary=self.members.recent_digests(room, PROMPT_DIARY_DAYS),
             memory=self.members.facts_for(room, message.sender_id), tools=tools,
             system=self.members.global_prompt, limit=self.members.reply_limit,
-            quote=quote_hint(message, self.images))
+            quote=quote_hint(message), quoted_image=quoted_image_token(message, self.images))
         reply = personality_text(reply, personality.name)
         ctx.logger.info("对话正文 | 群=%s | %s", room, reply)
         model_seconds = time.perf_counter() - started
@@ -337,10 +338,11 @@ class Plugin:
             personality = ctx.personality(anchor)
             tools = chat_tools(ctx.llm, self.members, room, speakers=self._speakers(chosen))
             cutoff = chosen.index(last_human) + 1 if last_human in chosen else len(chosen)
-            turns = history_turns(chosen[:cutoff], bot_id=bot)
+            shown = chosen[:cutoff]
+            turns = history_turns(shown, bot_id=bot)
             note = context_note(datetime.now(BEIJING).date().isoformat(),
                                 diary=self.members.recent_digests(room, PROMPT_DIARY_DAYS),
-                                people=self._people(room, chosen), unnamed=True)
+                                people=self._people(room, chosen), images=image_catalog(shown), unnamed=True)
             reply = ctx.llm_for(anchor, personality=personality).chat(
                 merge_system(self.members.global_prompt, note), turns, tools)
             reply = personality_text(checked_reply(pro.clean_reply(reply), self.members.reply_limit), personality.name)

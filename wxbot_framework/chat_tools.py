@@ -149,9 +149,9 @@ def view_image_tool(llm):
         return llm.vision_client().chat(VISION_SYSTEM, question, image=url, thinking=False)
 
     return Tool("view_image",
-                "本轮回复发出前同步查看消息里 [图片 id=...] 或 [引用图片 id=...] 的图片，返回画面文字描述。需要看图就立刻调用，不要发文字说先看看；id 填消息里的编号。",
+                "本轮回复发出前同步查看参考背景「可查看图片」里的某张图，返回画面文字描述。需要看图就立刻调用，不要发文字说先看看；id 填那个编号，不要把编号写进回复。",
                 {"type": "object", "properties": {
-                    "id": {"type": "string", "description": "消息中 [图片 id=...] 里的编号"},
+                    "id": {"type": "string", "description": "参考背景「可查看图片」里的编号"},
                     "question": {"type": "string", "description": "想从图里看清什么细节"}},
                  "required": ["id"]}, run)
 

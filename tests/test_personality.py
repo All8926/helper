@@ -1,6 +1,7 @@
 """群人格持久性、统一风格、真实艾特与群聊流水及取消竞态。"""
 import json
 import sys
+import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -183,6 +184,19 @@ class PersonalityTests(unittest.TestCase):
         app.plugins.is_active.return_value = False
         run("/开启对话")
         self.assertEqual(sent[-1][1], "艾特对话在插件管理里是停用的，请先在后台打开。")
+        self.assertNotIn("mention_chat", self.store.disabled_plugins(ROOM))
+        app.plugins.is_active.return_value = True
+        app._group_roles = {ROOM: ("test", time.monotonic(), {OTHER: "owner"})}
+        run("/关闭对话", sender=OTHER)
+        self.assertEqual(sent[-1][1], "已关闭本群的对话功能。")
+        self.assertIn("mention_chat", self.store.disabled_plugins(ROOM))
+        app._group_roles = {}
+        app.service.group_member_role.return_value = "owner"
+        run("/开启对话", sender=OTHER)
+        self.assertEqual(sent[-1][1], "已开启本群的对话功能。")
+        app.service.group_member_role.return_value = "admin"
+        run("/关闭对话", sender=OTHER)
+        self.assertEqual(sent[-1][1], "只有管理员可以使用这个指令。")
         self.assertNotIn("mention_chat", self.store.disabled_plugins(ROOM))
 
     def test_speak_activity_command_sets_one_room_threshold(self):

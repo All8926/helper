@@ -17,7 +17,7 @@ from .plugins import PluginManager
 from .sdk import Message, ServiceFacade
 from .members import MemberStore
 from .personality import prepare_switch
-from .room_behavior import chat_switch, command_blocked, speak_activity
+from .room_behavior import chat_switch, command_blocked, is_slash_command, speak_activity
 
 logger = logging.getLogger("Bot")
 
@@ -259,6 +259,8 @@ class BotApplication:
                 except Exception:
                     logger.exception("群文本保存失败，消息继续分发到插件")
             if message.data.get("dispatch_to_plugins", True):
+                if self.members is not None:
+                    message = self._confirm_command_sender(message)
                 if self.members is not None and command_blocked(self.members, message):
                     self._notify_admin_only(message)
                 else:
@@ -275,8 +277,28 @@ class BotApplication:
                         message = prepare_switch(message, self.members)
                     self.plugins.dispatch(message)
 
+    def _confirm_command_sender(self, message):
+        """斜杠指令遇到未知身份时再查一次。只有确认的群主才额外放行。"""
+        role = message.data.get("sender_role")
+        if (not message.is_group or not is_slash_command(message.text)
+                or (isinstance(role, str) and role in ("owner", "admin", "member"))):
+            return message
+        service = getattr(self, "service", None)
+        lookup = getattr(service, "group_member_role", None)
+        sender = message.sender_id
+        if not callable(lookup) or not isinstance(sender, str) or not sender:
+            return message
+        try:
+            role = lookup(message.chat_id, sender, expected_session=message.session_id)
+        except Exception:
+            logger.info("群指令未能确认发送者身份：room=%s", message.chat_id)
+            return message
+        if not isinstance(role, str) or role not in ("owner", "admin", "member"):
+            return message
+        return replace(message, data=MappingProxyType(dict(message.data, sender_role=role)))
+
     def _switch_mention_chat(self, message, enabled):
-        """管理员按群开关艾特对话。插件管理里的总开关关着时，群指令不能单独打开。"""
+        """管理员或群主按群开关艾特对话。插件管理里的总开关关着时，群指令不能单独打开。"""
         if not self.plugins.is_active("mention_chat"):
             if enabled:
                 self._reply_command(message, "艾特对话在插件管理里是停用的，请先在后台打开。")

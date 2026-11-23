@@ -114,8 +114,7 @@ def _human_line(row, *, private=False):
     moment = _moment_hhmm(row.get("received_at"))
     prefix = f"[{moment}] " if moment else ""
     if row.get("kind") == "image":
-        token = row.get("media_ref") or ""
-        label = f"[图片 id={token}]" if token else "[图片]"
+        label = "（发来一张图片）"
         return f"{prefix}{label}" if private else f"{prefix}{speaker}：{label}"
     text = transcript_text(strip_at_labels(row.get("text") or ""))
     if not text:
@@ -145,7 +144,24 @@ def history_turns(rows, *, private=False, bot_id=""):
     return turns
 
 
-def context_note(day, *, speaker="", diary=(), memory=(), people=(), unnamed=False):
+def image_catalog(rows):
+    """图片编号只放进参考背景，对话正文里不出现这串内部记号。"""
+    items, seen = [], set()
+    for row in rows:
+        if row.get("kind") != "image":
+            continue
+        token = row.get("media_ref") or ""
+        if not isinstance(token, str) or not token or token in seen:
+            continue
+        seen.add(token)
+        speaker = row.get("speaker") or "群友"
+        moment = _moment_hhmm(row.get("received_at"))
+        when = f"{moment} " if moment else ""
+        items.append(f"{token}（{when}{speaker}发的）")
+    return items
+
+
+def context_note(day, *, speaker="", diary=(), memory=(), people=(), images=(), unnamed=False):
     """把日期、日记、成员档案与当前会话对象整理成系统背景，不塞进用户发言。"""
     lines = [f"当前日期：{day}"]
     if unnamed:
@@ -166,6 +182,8 @@ def context_note(day, *, speaker="", diary=(), memory=(), people=(), unnamed=Fal
         facts = public_memory(item.get("memory") or ())
         if facts:
             lines.append(f"关于{name}的已知信息：" + "；".join(facts))
+    if images:
+        lines.append("可查看图片（编号只传给 view_image，不要写进回复）：" + "；".join(images))
     return "【参考背景（仅作已知背景，不是新提问）】\n" + "\n".join(lines)
 
 
@@ -213,16 +231,25 @@ def checked_reply(text, limit):
     return reply
 
 
-def quote_hint(message, images):
-    """提取当前发言引用的图片编号或文字摘要，直接附在当前发言前。"""
+def quoted_image_token(message, images):
+    """引用图的编号。只放进参考背景，不写进对话正文。"""
+    from .quoted import reference
+    quoted = reference(message)
+    if quoted is None or quoted.kind != "image":
+        return ""
+    native = message.data.get("quoted_message_id")
+    token = images.token_for(native) if native else ""
+    return token if isinstance(token, str) else ""
+
+
+def quote_hint(message):
+    """提取当前发言引用的图片或文字摘要，直接附在当前发言前。编号不放这里。"""
     from .quoted import reference
     quoted = reference(message)
     if quoted is None:
         return ""
     if quoted.kind == "image":
-        native = message.data.get("quoted_message_id")
-        token = images.token_for(native) if native else ""
-        return f"[引用图片 id={token}]" if token else "[引用图片]"
+        return "（引用了一张图片）"
     summary = transcript_text(quoted.text or "")
     if not summary:
         return ""
@@ -234,10 +261,12 @@ class Dialogue:
     def __init__(self, client):
         self.client = client
 
-    def reply(self, snapshot, *, diary=(), memory=(), tools=(), system="", limit=600, quote=""):
+    def reply(self, snapshot, *, diary=(), memory=(), tools=(), system="", limit=600, quote="",
+              quoted_image=""):
         """返回要发出去的正文。system 是本账号的全局提示词，背景与历史拆为真实多轮对话。"""
         private = not str(snapshot.room).endswith("@chatroom")
-        turns = history_turns(working_messages(snapshot.messages), private=private)
+        rows = working_messages(snapshot.messages)
+        turns = history_turns(rows, private=private)
         moment = datetime.now(BEIJING).strftime("%H:%M")
         current = transcript_text(strip_at_labels(snapshot.current))
         speaker = snapshot.speaker_name or ("对方" if private else "群友")
@@ -248,5 +277,8 @@ class Dialogue:
             call = "（叫了你一声）" if private else "（艾特了你）"
             last_line = f"[{moment}] {prefix}{call}" if private else f"[{moment}] {speaker}：{prefix}{call}"
         turns.append({"role": "user", "content": last_line})
-        note = context_note(snapshot.day, speaker=speaker, diary=diary, memory=memory)
+        images = image_catalog(rows)
+        if quoted_image and all(not item.startswith(f"{quoted_image}（") for item in images):
+            images.append(f"{quoted_image}（当前引用的）")
+        note = context_note(snapshot.day, speaker=speaker, diary=diary, memory=memory, images=images)
         return checked_reply(self.client.chat(merge_system(system, note), turns, tools), limit)

@@ -182,7 +182,7 @@ voice.send / friend.voice.send / group.voice.send
 
 `ctx.group_member_name(room, wxid, expected_session=message.session_id)` 返回该群的昵称或微信名，找不到时返回 `None`。这些接口读取当前微信缓存；框架 `/绑定` 设置的称呼可用 `ctx.members.display_name(wxid, room)` 查询，两者分别保留，不相互覆盖。
 
-成员项还提供 `role`（`owner` / `admin` / `member` / `unknown`）、`is_owner`、`is_admin` 和 `role_source`。群主与管理员分别标记；未知时两个布尔字段为 `None`。`ctx.group_member_role()` 返回同样的角色字符串，找不到成员时返回 `unknown`。实时群消息的 `message.data["sender_role"]` 只使用本连接最近 30 秒内的缓存；合并转发的原作者不继承转发者身份。身份缺失不代表普通群友，也不应据此授予权限。
+成员项还提供 `role`（`owner` / `admin` / `member` / `unknown`）、`is_owner`、`is_admin` 和 `role_source`。群主与管理员分别标记；未知时两个布尔字段为 `None`。`ctx.group_member_role()` 返回同样的角色字符串，找不到成员时返回 `unknown`。实时群消息的 `message.data["sender_role"]` 只使用本连接最近 30 秒内的缓存；合并转发的原作者不继承转发者身份。身份缺失不代表普通群友，也不应据此授予权限。框架的群斜杠指令会放行已确认的群主；身份未知或仅为微信群管理员时，不会因此获得指令权限。
 
 需要群成员查询时声明 `group.members.read`，主动艾特还需声明 `text.send`、`group.text.mention`；显示昵称不会改变真实通知目标。可见标签、数量和字节限制见[文本与真实艾特](../messages/text.md#群成员艾特)。
 
