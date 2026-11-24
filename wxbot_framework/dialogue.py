@@ -110,13 +110,12 @@ def _moment_hhmm(received_at):
 
 
 def _human_line(row, *, private=False):
+    if row.get("kind") == "image":
+        # 图片只进参考背景。写进对话正文会被模型原样说出去。
+        return ""
     speaker = row.get("speaker") or ("对方" if private else "群友")
     moment = _moment_hhmm(row.get("received_at"))
     prefix = f"[{moment}] " if moment else ""
-    if row.get("kind") == "image":
-        # 不用括号，避免模型把表情也写成旁白。
-        label = "发来一张图片"
-        return f"{prefix}{label}" if private else f"{prefix}{speaker}：{label}"
     text = transcript_text(strip_at_labels(row.get("text") or ""))
     if not text:
         return ""
@@ -162,7 +161,8 @@ def image_catalog(rows):
     return items
 
 
-def context_note(day, *, speaker="", diary=(), memory=(), people=(), images=(), unnamed=False):
+def context_note(day, *, speaker="", diary=(), memory=(), people=(), images=(), unnamed=False,
+                 focus_image=False):
     """把日期、日记、成员档案与当前会话对象整理成系统背景，不塞进用户发言。"""
     lines = [f"当前日期：{day}"]
     if unnamed:
@@ -185,6 +185,8 @@ def context_note(day, *, speaker="", diary=(), memory=(), people=(), images=(), 
             lines.append(f"关于{name}的已知信息：" + "；".join(facts))
     if images:
         lines.append("可查看图片（编号只传给 view_image，不要写进回复）：" + "；".join(images))
+        if focus_image:
+            lines.append("此刻要接的是可查看图片里的最后一张，直接说画面里的内容。")
     return "【参考背景（仅作已知背景，不是新提问）】\n" + "\n".join(lines)
 
 
@@ -250,7 +252,7 @@ def quote_hint(message):
     if quoted is None:
         return ""
     if quoted.kind == "image":
-        return "引用了一张图片"
+        return ""
     summary = transcript_text(quoted.text or "")
     if not summary:
         return ""

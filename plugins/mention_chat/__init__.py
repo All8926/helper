@@ -340,9 +340,13 @@ class Plugin:
             cutoff = chosen.index(last_human) + 1 if last_human in chosen else len(chosen)
             shown = chosen[:cutoff]
             turns = history_turns(shown, bot_id=bot)
+            if not turns or turns[-1]["role"] != "user":
+                ctx.logger.info("未点名回应 | 群=%s | 图片之外没有可接的话", room)
+                return
             note = context_note(datetime.now(BEIJING).date().isoformat(),
                                 diary=self.members.recent_digests(room, PROMPT_DIARY_DAYS),
-                                people=self._people(room, chosen), images=image_catalog(shown), unnamed=True)
+                                people=self._people(room, chosen), images=image_catalog(shown),
+                                unnamed=True, focus_image=bool(last_human and last_human.get("kind") == "image"))
             reply = ctx.llm_for(anchor, personality=personality).chat(
                 merge_system(self.members.global_prompt, note), turns, tools)
             reply = personality_text(checked_reply(pro.clean_reply(reply), self.members.reply_limit), personality.name)
